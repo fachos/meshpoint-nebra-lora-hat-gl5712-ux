@@ -1,0 +1,33 @@
+diff --git a/frontend/js/node_cards.js b/frontend/js/node_cards.js
+index 4a7b922..cdd2f20 100644
+--- a/frontend/js/node_cards.js
++++ b/frontend/js/node_cards.js
+@@ -16,6 +16,7 @@ class NodeCards {
+         this._container = document.getElementById(containerId);
+         this._onCardClick = onCardClick;
+         this._nodes = [];
++        this._lastHtml = null;
+         this._searchQuery = '';
+         this._sortBy = this._loadSavedSort();
+         this._filter = this._loadSavedFilter();
+@@ -177,12 +178,19 @@ class NodeCards {
+         working = this._applySort(working);
+ 
+         if (working.length === 0) {
++            if (this._lastHtml === '') return;
++            this._lastHtml = '';
+             this._container.innerHTML =
+                 '<div class="nc-empty">No nodes found</div>';
+             return;
+         }
+ 
+-        this._container.innerHTML = working.map(n => this._buildCard(n)).join('');
++        // Rebuilding the whole list on every packet and every 15 s poll makes the
++        // panel flicker. Only touch the DOM when the markup actually changed.
++        const html = working.map(n => this._buildCard(n)).join('');
++        if (html === this._lastHtml) return;
++        this._lastHtml = html;
++        this._container.innerHTML = html;
+ 
+         this._container.querySelectorAll('[data-favorite-toggle]').forEach((btn) => {
+             btn.addEventListener('click', (e) => {

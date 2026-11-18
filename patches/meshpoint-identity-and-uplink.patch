@@ -1,0 +1,498 @@
+diff --git a/src/api/routes/mqtt_config_routes.py b/src/api/routes/mqtt_config_routes.py
+index 8f08060..79fbe07 100644
+--- a/src/api/routes/mqtt_config_routes.py
++++ b/src/api/routes/mqtt_config_routes.py
+@@ -98,13 +98,15 @@ def build_mqtt_status(mqtt: MqttConfig, device_name: str) -> dict:
+         "tls_enabled": mqtt.tls_enabled,
+         "tls_ca_cert": mqtt.tls_ca_cert or "",
+         "topic_preview_meshtastic": _topic_example(
+-            mqtt.topic_root, mqtt.region, "e", "LongFast", gateway
++            mqtt.topic_root, mqtt.region, "e",
++            (mqtt.publish_channels or ["LongFast"])[0], gateway
+         ),
+         "topic_preview_meshcore": _topic_example(
+             mqtt.topic_root, mqtt.region, "c", "MeshCore", gateway
+         ),
+         "topic_preview_json": _topic_example(
+-            mqtt.topic_root, mqtt.region, "json", "LongFast", gateway
++            mqtt.topic_root, mqtt.region, "json",
++            (mqtt.publish_channels or ["LongFast"])[0], gateway
+         ),
+     }
+ 
+diff --git a/src/api/server.py b/src/api/server.py
+index 844dec7..abb0325 100644
+--- a/src/api/server.py
++++ b/src/api/server.py
+@@ -194,6 +194,15 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
+         upstream = UpstreamClient(
+             config.upstream, identity,
+             stats_reporter=pipeline.stats_reporter,
++            radio_hint={
++                "region": config.radio.region,
++                "frequency_mhz": config.radio.frequency_mhz,
++                "spreading_factor": config.radio.spreading_factor,
++                "bandwidth_khz": config.radio.bandwidth_khz,
++                "primary_channel_name": getattr(
++                    config.meshtastic, "primary_channel_name", None
++                ),
++            },
+         )
+         pipeline.on_packet(upstream.send_packet)
+         await upstream.start()
+@@ -713,6 +722,9 @@ def _build_tx_service(
+         node_repo=coord.node_repo,
+         serial_sources=_find_serial_sources(coord),
+     )
++    # Gateway-originated traffic never passed through the capture pipeline, so
++    # hand it to the MQTT publisher explicitly (received traffic already goes).
++    tx_svc.set_mesh_publish_callback(coord._publish_mqtt)
+     logger.info(
+         "Transmit service ready: MT=%s MC=%s",
+         tx_svc.meshtastic_enabled, tx_svc.meshcore_enabled,
+@@ -803,12 +815,15 @@ def _build_nodeinfo_broadcaster(
+             "(transmit.nodeinfo.interval_minutes=0); save a non-zero "
+             "interval on the radio tab to resume."
+         )
++    from src.transmit.meshtastic_builder import role_value
+     return NodeInfoBroadcaster(
+         tx_service=tx_service,
+         long_name=config.transmit.long_name,
+         short_name=config.transmit.short_name,
+         startup_delay_seconds=startup_delay,
+         interval_seconds=interval_minutes * 60,
++        hw_model=int(getattr(config.device, "hardware_model", 37) or 37),
++        role=role_value(getattr(config.device, "role", "CLIENT")),
+     )
+ 
+ 
+diff --git a/src/api/upstream_client.py b/src/api/upstream_client.py
+index 8965fe7..595faf1 100644
+--- a/src/api/upstream_client.py
++++ b/src/api/upstream_client.py
+@@ -48,8 +48,10 @@ class UpstreamClient:
+         config: UpstreamConfig,
+         identity: DeviceIdentity,
+         stats_reporter: Optional[StatsReporter] = None,
++        radio_hint: Optional[dict] = None,
+     ):
+         self._config = config
++        self._radio_hint = radio_hint or {}
+         self._identity = identity
+         self._stats_reporter = stats_reporter
+         self._connection: Optional[websockets.WebSocketClientProtocol] = None
+@@ -66,6 +68,13 @@ class UpstreamClient:
+             max_per_minute=self.UPSTREAM_MAX_PACKETS_PER_MINUTE,
+             burst_size=self.UPSTREAM_BURST_SIZE,
+         )
++        # Positions are what put a node on the map, and they are rare next to
++        # chatter. Starving them behind NodeInfo/telemetry bursts leaves the map
++        # empty while the audit page looks healthy.
++        self._position_limiter = RateLimiter(
++            max_per_minute=self.UPSTREAM_MAX_PACKETS_PER_MINUTE * 4,
++            burst_size=self.UPSTREAM_BURST_SIZE * 4,
++        )
+         self._dropped_count = 0
+ 
+     @property
+@@ -109,7 +118,14 @@ class UpstreamClient:
+         """Queue a packet for upstream delivery (rate-limited)."""
+         if not self._config.enabled:
+             return
+-        if not self._rate_limiter.allow():
++        from src.models.packet import PacketType
++
++        limiter = (
++            self._position_limiter
++            if packet.packet_type == PacketType.POSITION
++            else self._rate_limiter
++        )
++        if not limiter.allow():
+             self._dropped_count += 1
+             if self._dropped_count % 50 == 1:
+                 logger.warning(
+@@ -245,11 +261,16 @@ class UpstreamClient:
+         return heartbeat
+ 
+     def _build_registration(self) -> dict:
+-        return {
++        payload = {
+             "type": "register",
+             "device": self._identity.to_dict(),
+             "timestamp": datetime.now(timezone.utc).isoformat(),
+         }
++        # The device record has never carried the radio plan, so a cloud map can
++        # only know the region someone typed at claim time. Send it explicitly.
++        if self._radio_hint:
++            payload["radio"] = dict(self._radio_hint)
++        return payload
+ 
+     async def _flush_buffer(self) -> None:
+         while self._buffer and self._connected:
+diff --git a/src/config.py b/src/config.py
+index 8d61c00..0d952e9 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -184,6 +184,12 @@ class DeviceConfig:
+     altitude: Optional[float] = None
+     hardware_description: str = "RAK2287 + Raspberry Pi 4"
+     firmware_version: str = __version__
++    # HardwareModel value advertised in NodeInfo (37 = PORTDUINO, today's
++    # behaviour; 43 = HELTEC_V3, 9 = RAK4631, 255 = PRIVATE_HW).
++    hardware_model: int = 37
++    # DeviceConfig.Role name advertised in NodeInfo; CLIENT is what upstream
++    # effectively sends today.
++    role: str = "CLIENT"
+ 
+ 
+ @dataclass
+@@ -372,7 +378,7 @@ class AppConfig:
+     metrics: MetricsConfig = field(default_factory=MetricsConfig)
+ 
+ 
+-def _resolve_radio_frequency(radio: "RadioConfig") -> None:
++def _resolve_radio_frequency(radio: "RadioConfig", channel_name: str | None = None) -> None:
+     """Resolve radio.frequency_mhz at startup.
+ 
+     Priority (first match wins):
+@@ -390,6 +396,19 @@ def _resolve_radio_frequency(radio: "RadioConfig") -> None:
+                 freq_start + spacing / 2 + (radio.slot - 1) * spacing, 4
+             )
+             return
++    # Neither set: let the region plan and the channel name choose, exactly as
++    # the Meshtastic firmware does (band start + half bandwidth + slot).
++    try:
++        from src.radio.presets import region_default_frequency
++
++        computed = region_default_frequency(
++            radio.region, radio.bandwidth_khz, channel_name
++        )
++    except Exception:
++        computed = None
++    if computed is not None:
++        radio.frequency_mhz = computed
++        return
+     radio.frequency_mhz = _REGION_DEFAULT_FREQ.get(radio.region, 906.875)
+ 
+ 
+@@ -510,7 +529,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
+ 
+     local = config_path or os.environ.get("CONCENTRATOR_CONFIG", "config/local.yaml")
+     _apply_yaml(cfg, _validated_config_path(local))
+-    _resolve_radio_frequency(cfg.radio)
++    _resolve_radio_frequency(
++        cfg.radio, getattr(cfg.meshtastic, "primary_channel_name", None)
++    )
+ 
+     return cfg
+ 
+diff --git a/src/decode/meshtastic_decoder.py b/src/decode/meshtastic_decoder.py
+index 4f78516..6a6d8ff 100644
+--- a/src/decode/meshtastic_decoder.py
++++ b/src/decode/meshtastic_decoder.py
+@@ -178,7 +178,7 @@ class MeshtasticDecoder:
+             via_mqtt=header["via_mqtt"],
+             relay_node=header["relay_node"],
+             decoded_payload=decoded_payload,
+-            encrypted_payload=encrypted_payload if not decrypted else None,
++            encrypted_payload=encrypted_payload,
+             raw_app_payload=raw_app_payload,
+             raw_radio_packet=bytes(raw_bytes),
+             decrypted=decrypted,
+@@ -312,6 +312,7 @@ class MeshtasticDecoder:
+             node.long_name = packet.decoded_payload.get("long_name")
+             node.short_name = packet.decoded_payload.get("short_name")
+             node.hardware_model = packet.decoded_payload.get("hw_model")
++            node.role = packet.decoded_payload.get("role")
+             node.public_key = packet.decoded_payload.get("public_key")
+ 
+         if packet.packet_type == PacketType.POSITION:
+diff --git a/src/relay/mqtt_formatter.py b/src/relay/mqtt_formatter.py
+index f87ea52..dff09c1 100644
+--- a/src/relay/mqtt_formatter.py
++++ b/src/relay/mqtt_formatter.py
+@@ -71,6 +71,12 @@ class MeshtasticMqttFormatter:
+             logger.warning("meshtastic protobuf not available")
+             return None
+ 
++        # Firmware with MQTT encryption enabled ignores decoded packets on the
++        # broker ("Ignore decoded message on MQTT, encryption is enabled"), so a
++        # gateway must republish the ciphertext it received, not plaintext.
++        if packet.encrypted_payload:
++            return self._format_encrypted(packet)
++
+         portnum = PORTNUM_MAP.get(packet.packet_type)
+         if portnum is None:
+             return None
+diff --git a/src/relay/mqtt_privacy.py b/src/relay/mqtt_privacy.py
+index 858ed83..c54df94 100644
+--- a/src/relay/mqtt_privacy.py
++++ b/src/relay/mqtt_privacy.py
+@@ -47,5 +47,8 @@ def prepare_packet(packet: Packet, precision: str) -> Packet:
+             result.update(latitude=round(lat, 2), longitude=round(lon, 2))
+         return result
+ 
++    # Keep encrypted_payload: Meshtastic bridges publish the ciphertext they
++    # received (firmware drops decoded packets when MQTT encryption is on).
++    # Location filtering still applies to the decoded copy used for /json.
+     return replace(packet, decoded_payload=filtered(deepcopy(packet.decoded_payload)),
+-                   encrypted_payload=None, raw_app_payload=None, raw_radio_packet=None)
++                   raw_app_payload=None, raw_radio_packet=None)
+diff --git a/src/relay/mqtt_publisher.py b/src/relay/mqtt_publisher.py
+index 5cbcb3d..1868c6a 100644
+--- a/src/relay/mqtt_publisher.py
++++ b/src/relay/mqtt_publisher.py
+@@ -486,7 +486,10 @@ def _iso_from_monotonic(monotonic_at: float | None) -> str | None:
+ def _resolve_gateway_id(override: Optional[str], device_name: str) -> str:
+     """Use explicit config override or derive from device name."""
+     if override:
+-        raw = override.strip()
++        # YAML may hand us an int when the id is all digits; a node id is text.
++        raw = str(override).strip()
++        if not raw:
++            return _generate_gateway_id(device_name)
+         if raw.startswith("!"):
+             return raw.lower()
+         return f"!{raw.lower()}"
+diff --git a/src/transmit/meshtastic_builder.py b/src/transmit/meshtastic_builder.py
+index 2fb20b4..165490e 100644
+--- a/src/transmit/meshtastic_builder.py
++++ b/src/transmit/meshtastic_builder.py
+@@ -23,6 +23,20 @@ PORTNUM_ROUTING = 5
+ PORTNUM_TELEMETRY = 67
+ PORTNUM_TRACEROUTE = 70
+ HW_MODEL_PRIVATE_HW = 255
++
++# meshtastic Config.DeviceConfig.Role
++DEVICE_ROLES = {
++    "CLIENT": 0, "CLIENT_MUTE": 1, "ROUTER": 2, "ROUTER_CLIENT": 3,
++    "REPEATER": 4, "TRACKER": 5, "SENSOR": 6, "TAK": 7,
++    "CLIENT_HIDDEN": 8, "LOST_AND_FOUND": 9, "TAK_TRACKER": 10,
++}
++
++
++def role_value(name) -> int:
++    """Map a role name to its protobuf value; unknown names fall back to CLIENT."""
++    if isinstance(name, int):
++        return name
++    return DEVICE_ROLES.get(str(name or "CLIENT").strip().upper(), 0)
+ MAINS_BATTERY_LEVEL = 101
+ 
+ 
+@@ -84,11 +98,12 @@ class MeshtasticPacketBuilder:
+         channel_hash: int = 0x08,
+         hop_limit: int = 3,
+         hop_start: int = 3,
++        role: int = 0,
+     ) -> bytes | None:
+         """Build a broadcast NODEINFO_APP packet announcing this node."""
+         node_id_str = f"!{source_id:08x}"
+         user_payload = self._serialize_user(
+-            node_id_str, long_name, short_name, hw_model, public_key
++            node_id_str, long_name, short_name, hw_model, public_key, role
+         )
+         inner = self._serialize_data(PORTNUM_NODEINFO, user_payload)
+         ciphertext = self._crypto.encrypt_meshtastic(
+@@ -428,6 +443,7 @@ class MeshtasticPacketBuilder:
+         short_name: str,
+         hw_model: int,
+         public_key: bytes | None = None,
++        role: int = 0,
+     ) -> bytes:
+         """Serialize a mesh_pb2.User protobuf manually."""
+         result = bytearray()
+@@ -442,6 +458,9 @@ class MeshtasticPacketBuilder:
+             result.extend(encoded)
+         result.append(0x28)
+         result.extend(_encode_varint(hw_model))
++        if role:
++            result.append(0x38)
++            result.extend(_encode_varint(int(role)))
+         if public_key:
+             result.append(0x42)
+             result.extend(_encode_varint(len(public_key)))
+diff --git a/src/transmit/nodeinfo_broadcaster.py b/src/transmit/nodeinfo_broadcaster.py
+index 8f3a6b9..4203d2d 100644
+--- a/src/transmit/nodeinfo_broadcaster.py
++++ b/src/transmit/nodeinfo_broadcaster.py
+@@ -55,11 +55,13 @@ class NodeInfoBroadcaster:
+         startup_delay_seconds: int = DEFAULT_STARTUP_DELAY_SECONDS,
+         interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
+         hw_model: int = HW_MODEL_PORTDUINO,
++        role: int = 0,
+     ):
+         self._tx = tx_service
+         self._long_name = long_name
+         self._short_name = short_name
+         self._hw_model = hw_model
++        self._role = role
+         self._task: Optional[asyncio.Task] = None
+         self._running = False
+         self._schedule = BroadcastIntervalController(
+@@ -145,6 +147,7 @@ class NodeInfoBroadcaster:
+                 long_name=self._long_name,
+                 short_name=self._short_name,
+                 hw_model=self._hw_model,
++                role=self._role,
+             )
+         except Exception as exc:
+             logger.exception("NodeInfo send raised")
+diff --git a/src/transmit/tx_service.py b/src/transmit/tx_service.py
+index 24dc1e6..32df35e 100644
+--- a/src/transmit/tx_service.py
++++ b/src/transmit/tx_service.py
+@@ -15,7 +15,7 @@ import time
+ from dataclasses import dataclass
+ from typing import Optional
+ 
+-from src.models.packet import Protocol
++from src.models.packet import Packet, PacketType, Protocol
+ from src.transmit.duty_cycle import DutyCycleTracker
+ from src.transmit.reply_hop_policy import MeshtasticReplyHopPolicy
+ 
+@@ -83,6 +83,7 @@ class TxService:
+         self._duty = duty_tracker
+         self._radio_config = radio_config
+         self._primary_channel_name = primary_channel_name
++        self._mesh_publish = None
+         self._device_id = device_id
+         self._builder = None
+         self._packet_counter = random.randint(1, 0xFFFF)
+@@ -147,6 +148,40 @@ class TxService:
+         """Where the resolved node_id came from: 'config', 'derived', or 'random'."""
+         return self._node_id_source
+ 
++    def set_mesh_publish_callback(self, callback) -> None:
++        """Register a sink for packets this gateway originates.
++
++        Received traffic already reaches MQTT through the capture pipeline; a
++        message typed on the gateway never did, so only the RF neighbours heard
++        it. The callback receives a decoded Packet and hands it to the publisher.
++        """
++        self._mesh_publish = callback
++
++    def _publish_own(self, packet_type, packet_id, channel_hash, decoded_payload,
++                     destination: str = "ffffffff", raw: bytes | None = None) -> None:
++        if not self._mesh_publish:
++            return
++        try:
++            hop = self._config.hop_limit if self._config else DEFAULT_HOP_LIMIT
++            pkt = Packet(
++                packet_id=f"{int(packet_id):08x}",
++                source_id=f"{self._source_node_id:08x}",
++                destination_id=destination,
++                protocol=Protocol.MESHTASTIC,
++                packet_type=packet_type,
++                hop_limit=hop,
++                hop_start=hop,
++                channel_hash=channel_hash,
++                # Meshtastic bridges expect the ciphertext they can verify; a
++                # decoded-only envelope is dropped by firmware on the far side.
++                encrypted_payload=(raw[16:] if raw else None),
++                decoded_payload=(None if raw else decoded_payload),
++                decrypted=True,
++            )
++            self._mesh_publish(pkt)
++        except Exception:
++            logger.exception("MQTT publish of own transmission failed")
++
+     async def send_text(
+         self,
+         text: str,
+@@ -177,6 +212,7 @@ class TxService:
+         long_name: str,
+         short_name: str,
+         hw_model: int = HW_MODEL_PRIVATE_HW,
++        role: int = 0,
+     ) -> SendResult:
+         """Broadcast a Meshtastic NodeInfo packet announcing this Meshpoint.
+ 
+@@ -213,6 +249,7 @@ class TxService:
+                 long_name=long_name,
+                 short_name=short_name,
+                 hw_model=hw_model,
++                role=role,
+                 public_key=public_key,
+                 channel_key=channel_key,
+                 channel_hash=channel_hash,
+@@ -242,7 +279,14 @@ class TxService:
+             len(packet_bytes),
+         )
+ 
+-        tx_pkt = self._build_hal_packet(packet_bytes)
++        try:
++            tx_pkt = self._build_hal_packet(packet_bytes)
++        except (ValueError, RuntimeError) as exc:
++            logger.warning("TX unavailable: %s", exc)
++            return SendResult(
++                success=False, protocol="meshtastic",
++                packet_id=f"{packet_id:08x}", error=str(exc),
++            )
+         airtime_ms = await self._get_airtime(tx_pkt)
+ 
+         if self._duty and not self._duty.check_budget(airtime_ms):
+@@ -256,6 +300,17 @@ class TxService:
+ 
+         result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+         if result_code == 0:
++            self._publish_own(
++                PacketType.NODEINFO, packet_id, channel_hash,
++                {
++                    "id": f"!{self._source_node_id:08x}",
++                    "long_name": long_name,
++                    "short_name": short_name,
++                    "hw_model": str(hw_model),
++                    "role": str(role),
++                },
++                raw=packet_bytes,
++            )
+             return SendResult(
+                 success=True,
+                 protocol="meshtastic",
+@@ -366,7 +421,14 @@ class TxService:
+             len(packet_bytes), packet_bytes[:16].hex(),
+         )
+ 
+-        tx_pkt = self._build_hal_packet(packet_bytes)
++        try:
++            tx_pkt = self._build_hal_packet(packet_bytes)
++        except (ValueError, RuntimeError) as exc:
++            logger.warning("TX text unavailable: %s", exc)
++            return SendResult(
++                success=False, protocol="meshtastic",
++                packet_id=f"{packet_id:08x}", error=str(exc),
++            )
+         airtime_ms = await self._get_airtime(tx_pkt)
+ 
+         logger.info(
+@@ -393,6 +455,10 @@ class TxService:
+         result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+ 
+         if result_code == 0:
++            self._publish_own(
++                PacketType.TEXT, packet_id, channel_hash, {"text": text},
++                destination=f"{dest_int:08x}", raw=packet_bytes,
++            )
+             for delay in (0.05, 0.1, 0.5, 1.0):
+                 await asyncio.sleep(delay)
+                 st = await asyncio.to_thread(self._wrapper.get_tx_status, 0)
+@@ -693,7 +759,18 @@ class TxService:
+     async def _send_built_packet(
+         self, packet_bytes: bytes, packet_id: int, *, label: str
+     ) -> SendResult:
+-        tx_pkt = self._build_hal_packet(packet_bytes)
++        # A dead or unconfigured concentrator must read as a failed send, not as
++        # an unhandled error that turns the dashboard's POST into HTTP 500.
++        try:
++            tx_pkt = self._build_hal_packet(packet_bytes)
++        except (ValueError, RuntimeError) as exc:
++            logger.warning("TX %s unavailable: %s", label, exc)
++            return SendResult(
++                success=False,
++                protocol="meshtastic",
++                packet_id=f"{packet_id:08x}",
++                error=str(exc),
++            )
+         airtime_ms = await self._get_airtime(tx_pkt)
+ 
+         if self._duty and not self._duty.check_budget(airtime_ms):

@@ -1,0 +1,158 @@
+diff --git a/src/api/routes/config_routes.py b/src/api/routes/config_routes.py
+index 53dfb27..8cd7879 100644
+--- a/src/api/routes/config_routes.py
++++ b/src/api/routes/config_routes.py
+@@ -30,10 +30,13 @@ from src.config_export import build_quick_deploy_export
+ from src.models.device_identity import DeviceIdentity
+ from src.radio.presets import (
+     REGION_DEFAULTS,
++    REGION_PLANS,
+     SUPPORTED_REGIONS,
+     all_presets_list,
++    canonical_region,
+     get_preset,
+     preset_from_params,
++    region_default_frequency,
+ )
+ from src.transmit.duty_cycle import resolve_max_duty_percent
+ 
+@@ -225,8 +228,18 @@ async def get_config(claims: SessionClaims = Depends(require_auth)):
+         "duty_cycle": duty_info,
+         "presets": all_presets_list(),
+         "regions": [
+-            {"id": r, "name": d["name"], "frequency_mhz": d["frequency_mhz"]}
+-            for r, d in REGION_DEFAULTS.items()
++            {
++                "id": r,
++                "name": plan["name"],
++                "frequency_mhz": region_default_frequency(
++                    r, _config.radio.bandwidth_khz,
++                    _config.meshtastic.primary_channel_name,
++                ),
++                "band_mhz": [plan["start"], plan["end"]],
++                "power_limit_dbm": plan["power_limit_dbm"],
++                "duty_cycle_percent": plan["duty_cycle_percent"],
++            }
++            for r, plan in REGION_PLANS.items()
+         ],
+     }
+     enriched = config_enrichment.enrich_config_payload(_config, payload)
+@@ -406,11 +419,12 @@ async def update_radio(
+     restart_needed = False
+ 
+     if req.region is not None:
+-        if req.region not in SUPPORTED_REGIONS:
++        wanted = canonical_region(req.region)
++        if wanted not in SUPPORTED_REGIONS:
+             raise HTTPException(400, f"Unknown region: {req.region}")
+-        if req.region != radio.region:
++        if wanted != radio.region:
+             restart_needed = True
+-        updates["region"] = req.region
++        updates["region"] = wanted
+ 
+     if req.preset is not None:
+         preset = get_preset(req.preset)
+diff --git a/src/radio/presets.py b/src/radio/presets.py
+index 371c21d..77f50a5 100644
+--- a/src/radio/presets.py
++++ b/src/radio/presets.py
+@@ -40,7 +40,7 @@ MODEM_PRESETS: dict[str, ModemPreset] = {
+     "LONG_MODERATE": ModemPreset(
+         name="LONG_MODERATE",
+         display_name="LongModerate",
+-        spreading_factor=11,
++        spreading_factor=10,
+         bandwidth_khz=125,
+         coding_rate="4/8",
+     ),
+@@ -70,8 +70,8 @@ MODEM_PRESETS: dict[str, ModemPreset] = {
+         name="MEDIUM_SLOW",
+         display_name="MediumSlow",
+         spreading_factor=10,
+-        bandwidth_khz=250,
+-        coding_rate="4/5",
++        bandwidth_khz=125,
++        coding_rate="4/8",
+     ),
+     "SHORT_FAST": ModemPreset(
+         name="SHORT_FAST",
+@@ -84,8 +84,8 @@ MODEM_PRESETS: dict[str, ModemPreset] = {
+         name="SHORT_SLOW",
+         display_name="ShortSlow",
+         spreading_factor=8,
+-        bandwidth_khz=250,
+-        coding_rate="4/5",
++        bandwidth_khz=125,
++        coding_rate="4/8",
+     ),
+     "SHORT_TURBO": ModemPreset(
+         name="SHORT_TURBO",
+@@ -97,12 +97,67 @@ MODEM_PRESETS: dict[str, ModemPreset] = {
+ }
+ 
+ 
++# Region plans, as in the Meshtastic firmware table (freq start/end MHz,
++# channel spacing kHz, power limit dBm, duty cycle %). The carrier is not a
++# fixed number: it comes from the band plus the primary channel name.
++REGION_PLANS: dict[str, dict] = {
++    "US": {"name": "US 915", "start": 902.0, "end": 928.0, "spacing_khz": 0,
++           "power_limit_dbm": 30, "duty_cycle_percent": 100},
++    "EU_868": {"name": "EU 868", "start": 869.4, "end": 869.65, "spacing_khz": 0,
++               "power_limit_dbm": 27, "duty_cycle_percent": 10},
++    "ANZ": {"name": "Australia/NZ", "start": 915.0, "end": 928.0, "spacing_khz": 0,
++            "power_limit_dbm": 30, "duty_cycle_percent": 100},
++    "IN": {"name": "India 865", "start": 865.0, "end": 867.0, "spacing_khz": 0,
++           "power_limit_dbm": 30, "duty_cycle_percent": 100},
++    "KR": {"name": "Korea 920", "start": 920.0, "end": 923.0, "spacing_khz": 0,
++           "power_limit_dbm": 23, "duty_cycle_percent": 100},
++    "MY_919": {"name": "Malaysia 919", "start": 919.0, "end": 924.0, "spacing_khz": 0,
++               "power_limit_dbm": 27, "duty_cycle_percent": 100},
++    "SG_923": {"name": "Singapore 923", "start": 917.0, "end": 925.0, "spacing_khz": 0,
++               "power_limit_dbm": 20, "duty_cycle_percent": 100},
++}
++
++REGION_ALIASES = {"MY": "MY_919", "SG": "SG_923"}
++
++
++def canonical_region(region: str | None) -> str:
++    key = str(region or "").strip().upper()
++    return REGION_ALIASES.get(key, key)
++
++
++def _djb2(text: str) -> int:
++    h = 5381
++    for byte in text.encode():
++        h = ((h << 5) + h + byte) & 0xFFFFFFFF
++    return h
++
++
++def region_default_frequency(region: str, bandwidth_khz: float,
++                             channel_name: str | None) -> float | None:
++    """Carrier Meshtastic would pick, from band + bandwidth + channel name.
++
++    freq = start + bw/2000 + (hash(name) % slots) * (bw/1000)
++    A blank channel name resolves to the preset name upstream, so callers pass
++    the preset name in that case.
++    """
++    plan = REGION_PLANS.get(canonical_region(region))
++    if not plan:
++        return None
++    bw_mhz = float(bandwidth_khz) / 1000
++    slots = int((plan["end"] - plan["start"]) / ((plan["spacing_khz"] / 1000) + bw_mhz))
++    if slots <= 0:
++        return None
++    slot = _djb2(channel_name or "") % slots
++    return round(plan["start"] + bw_mhz / 2 + slot * bw_mhz, 4)
++
++
+ REGION_DEFAULTS: dict[str, dict] = {
+     "US": {"frequency_mhz": 906.875, "name": "US 915"},
+     "EU_868": {"frequency_mhz": 869.525, "name": "EU 868"},
+     "ANZ": {"frequency_mhz": 916.0, "name": "Australia/NZ"},
+     "IN": {"frequency_mhz": 865.4625, "name": "India 865"},
+     "KR": {"frequency_mhz": 921.9, "name": "Korea 920"},
++    "MY_919": {"frequency_mhz": 921.125, "name": "Malaysia 919"},
+     "SG_923": {"frequency_mhz": 923.0, "name": "Singapore 923"},
+ }
+ 

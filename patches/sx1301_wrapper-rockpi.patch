@@ -1,0 +1,178 @@
+diff --git a/src/hal/sx1301_wrapper.py b/src/hal/sx1301_wrapper.py
+index 51ae2e4..cb83fdc 100644
+--- a/src/hal/sx1301_wrapper.py
++++ b/src/hal/sx1301_wrapper.py
+@@ -2,12 +2,16 @@
+ from __future__ import annotations
+ 
+ import ctypes as c
++import logging
++import shutil
+ import subprocess
+ import threading
+ import time
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ @dataclass(frozen=True)
+ class SX1301TxPacket:
+@@ -35,7 +39,8 @@ class SX1301Wrapper:
+ 
+     def __init__(self, lib_path, reset_gpio=25, clksrc=1, tx_gain_lut=None):
+         self._path = Path(lib_path).resolve()
+-        if not 0 <= reset_gpio <= 27 or clksrc not in (0, 1):
++        # Pi BCM numbers are 0-27; Rock Pi/RK3399 exposes sysfs numbers up to ~160
++        if not 0 <= reset_gpio <= 1023 or clksrc not in (0, 1):
+             raise ValueError("Invalid SX1301 reset GPIO or clock source")
+         self._gpio, self._clksrc = reset_gpio, clksrc
+         self._gains = tx_gain_lut or []
+@@ -44,6 +49,8 @@ class SX1301Wrapper:
+         self._started = False
+         self._radio = None
+         self._tx = False
++        self._region = None
++        self._power_notice = False
+ 
+     def load(self):
+         if self._lib is not None:
+@@ -81,19 +88,48 @@ class SX1301Wrapper:
+         with self._lock:
+             if self._started:
+                 raise RuntimeError("Stop SX1301 before GPIO reset")
+-            for level in ("dl", "dh", "dl"):
+-                subprocess.run(["pinctrl", "set", str(self._gpio), "op", level],
+-                               check=True, capture_output=True)
++            if shutil.which("pinctrl"):
++                for level in ("dl", "dh", "dl"):
++                    subprocess.run(["pinctrl", "set", str(self._gpio), "op", level],
++                                   check=True, capture_output=True)
++                    time.sleep(0.1)
++                return
++            # Non-Pi hosts (Rock Pi/RK3399): drive the line through sysfs
++            base = Path(f"/sys/class/gpio/gpio{self._gpio}")
++            if not base.exists():
++                try:
++                    Path("/sys/class/gpio/export").write_text(str(self._gpio))
++                except OSError:
++                    pass
++                for _ in range(20):
++                    if base.exists():
++                        break
++                    time.sleep(0.05)
++            (base / "direction").write_text("out")
++            for level in (0, 1, 0):
++                (base / "value").write_text(str(level))
+                 time.sleep(0.1)
+ 
+     def configure(self, radio, transmit_enabled=False):
+-        if radio.region != "US" or radio.sync_word != 0x2B:
+-            raise ValueError("Experimental RAK2247 backend supports US / sync 0x2B only")
++        # GL5712-UX front end spans 863-928 MHz, so the US plan and the
++        # regional 919-924 / 917-925 plans are all inside it.
++        bands = {"US": (902.0, 928.0), "MY_919": (919.0, 924.0), "SG_923": (917.0, 925.0)}
++        aliases = {"MY": "MY_919", "SG": "SG_923"}
++        region = aliases.get(str(radio.region).strip().upper(), radio.region)
++        if region not in bands:
++            raise ValueError(
++                f"SX1301 backend has no band for region {region!r}; "
++                f"accepted region names: {', '.join(sorted(bands))}")
++        if radio.sync_word != 0x2B:
++            raise ValueError(
++                "SX1301 backend needs the Meshtastic sync word 0x2B (43); "
++                f"config has 0x{int(radio.sync_word):02X} ({radio.sync_word})")
+         hz, bw, sf = int(radio.frequency_mhz * 1e6), int(radio.bandwidth_khz), radio.spreading_factor
+         if bw not in (125, 250, 500) or not 7 <= sf <= 12:
+             raise ValueError("Unsupported SX1301 bandwidth/spreading factor")
+-        if not 902000000 + bw * 500 <= hz <= 928000000 - bw * 500:
+-            raise ValueError("SX1301 channel extends outside US band")
++        lo, hi = bands[region]
++        if not lo * 1e6 + bw * 500 <= hz <= hi * 1e6 - bw * 500:
++            raise ValueError(f"SX1301 channel extends outside the {region} band")
+         if transmit_enabled and not self._gains:
+             raise ValueError("SX1301 TX requires the verified carrier gain table")
+         if not isinstance(radio.preamble_length, int) or not 6 <= radio.preamble_length <= 65533:
+@@ -103,12 +139,19 @@ class SX1301Wrapper:
+             if self._lib.mp1301_configure(
+                 hz, sf, bw, self._clksrc, int(transmit_enabled), radio.preamble_length
+             ):
+-                raise RuntimeError("SX1301 configuration failed")
++                raise RuntimeError(
++                    "SX1301 did not answer on SPI while configuring (the HAL could "
++                    "not connect the concentrator). The HAT is unpowered, held in "
++                    "reset or not seated: check reg 0x01 with sx_probe.py, and if it "
++                    "is not 0x67 power-cycle the Pi at the DC plug (not the wall "
++                    "switch) before starting meshpoint."
++                )
+             for gain in self._gains:
+                 if self._lib.mp1301_add_gain(*(gain[k] for k in
+                     ("dig_gain", "pa_gain", "dac_gain", "mix_gain", "rf_power"))):
+                     raise ValueError("Invalid SX1301 TX gain table")
+             self._radio, self._tx = radio, transmit_enabled
++            self._region = region
+ 
+     def start(self):
+         with self._lock:
+@@ -187,10 +230,31 @@ class SX1301Wrapper:
+                         monotonic_before=before, monotonic_after=time.monotonic(),
+                         channel_clear=None, calibrated=False)
+ 
++    # Meshtastic's region table caps TX power per region; exceeding it is illegal.
++    REGION_POWER_LIMIT_DBM = {"US": 30, "MY_919": 27, "SG_923": 20}
++
++    def _tx_power(self, requested):
++        """Clamp a requested dBm to the region limit and a gain table row."""
++        allowed = sorted({int(g["rf_power"]) for g in self._gains})
++        cap = self.REGION_POWER_LIMIT_DBM.get(self._region or "", max(allowed, default=0))
++        allowed = [p for p in allowed if p <= cap] or allowed
++        if not allowed:
++            raise ValueError("SX1301 TX requires the verified carrier gain table")
++        if requested in allowed:
++            return requested
++        chosen = max((p for p in allowed if p <= requested), default=allowed[0])
++        if not self._power_notice:
++            logger.warning("SX1301 TX power %d dBm is not a row of the carrier gain "
++                           "table (%s dBm); transmitting at %d dBm", requested,
++                           ", ".join(str(p) for p in allowed), chosen)
++            self._power_notice = True
++        return chosen
++
+     def build_tx_packet(self, payload, radio, config):
+         packet = SX1301TxPacket(bytes(payload), int(radio.frequency_mhz * 1e6),
+             radio.spreading_factor, int(radio.bandwidth_khz),
+-            int(radio.coding_rate.split("/")[1]) - 4, config.tx_power_dbm,
++            int(radio.coding_rate.split("/")[1]) - 4,
++            self._tx_power(int(config.tx_power_dbm)),
+             preamble=radio.preamble_length)
+         self._validate_packet(packet)
+         return packet
+@@ -199,11 +263,23 @@ class SX1301Wrapper:
+         if not isinstance(p, SX1301TxPacket) or not 16 <= p.size <= 255:
+             raise ValueError("Invalid SX1301 TX packet")
+         r = self._radio
+-        if r is None or (p.freq_hz, p.datarate, p.bandwidth, p.preamble) != (
+-            int(r.frequency_mhz * 1e6), r.spreading_factor, int(r.bandwidth_khz), r.preamble_length):
+-            raise ValueError("SX1301 TX must match configured receiver")
++        if r is None:
++            raise RuntimeError(
++                "SX1301 TX unavailable: the receiver is not configured "
++                "(the concentrator did not start - check the journal for "
++                "'Capture source concentrator failed to start')")
++        expected = (int(r.frequency_mhz * 1e6), r.spreading_factor,
++                    int(r.bandwidth_khz), r.preamble_length)
++        actual = (p.freq_hz, p.datarate, p.bandwidth, p.preamble)
++        if actual != expected:
++            raise ValueError(
++                "SX1301 TX must match configured receiver: "
++                f"packet freq/sf/bw/preamble={actual} receiver={expected}")
+         if p.rf_power not in {g["rf_power"] for g in self._gains} or not 1 <= p.coderate <= 4:
+-            raise ValueError("Unsupported SX1301 power or coding rate")
++            raise ValueError(
++                "Unsupported SX1301 power or coding rate: power=%d coding_rate=%d, "
++                "gain table has %s dBm" % (p.rf_power, p.coderate,
++                ", ".join(str(int(g["rf_power"])) for g in self._gains)))
+ 
+     def _tx_call(self, name, packet):
+         self._validate_packet(packet)

@@ -1,0 +1,1731 @@
+diff --git a/README.md b/README.md
+index 8df87ed..fc8d069 100644
+--- a/README.md
++++ b/README.md
+@@ -344,3 +344,5 @@ AGPL-3.0: see [LICENSE](LICENSE). All source code, including HAL bindings, proto
+ ---
+ 
+ *Built for the mesh community by [Meshradar](https://meshradar.io).*
++
++Experimental Helium OG / RAK2247 SPI (SX1301) backend: see [hardware setup and limits](docs/SX1301-EXPERIMENTAL.md).
+diff --git a/config/sx1301-helium.example.yaml b/config/sx1301-helium.example.yaml
+new file mode 100644
+index 0000000..d7d2c23
+--- /dev/null
++++ b/config/sx1301-helium.example.yaml
+@@ -0,0 +1,138 @@
++# Experimental Helium OG / RAK2247 SPI US915 only. Copy to local.yaml.
++# Obtain a valid activation key through the normal Meshpoint setup.
++# Gain settings recovered from Helium firmware; DAC gain 3 is Semtech default.
++# Choose a unique device_id before transmitting; keep TX/relay off until tested.
++radio:
++  region: US
++  frequency_mhz: 906.875
++  spreading_factor: 11
++  bandwidth_khz: 250
++  coding_rate: 4/5
++  sync_word: 43
++  spectral_scan_interval_seconds: 0
++capture:
++  sources:
++  - concentrator
++  concentrator_backend: sx1301
++  sx1301_lib_path: build/libsx1301_meshpoint.so
++  sx1301_reset_gpio: 25
++  sx1301_clksrc: 1
++  sx1301_tx_gain_lut:
++  - pa_gain: 0
++    mix_gain: 8
++    rf_power: -6
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 0
++    mix_gain: 10
++    rf_power: -3
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 0
++    mix_gain: 12
++    rf_power: 0
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 1
++    mix_gain: 8
++    rf_power: 3
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 1
++    mix_gain: 10
++    rf_power: 6
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 1
++    mix_gain: 12
++    rf_power: 10
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 1
++    mix_gain: 13
++    rf_power: 11
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 2
++    mix_gain: 9
++    rf_power: 12
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 1
++    mix_gain: 15
++    rf_power: 13
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 2
++    mix_gain: 10
++    rf_power: 14
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 2
++    mix_gain: 11
++    rf_power: 16
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 3
++    mix_gain: 9
++    rf_power: 20
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 3
++    mix_gain: 10
++    rf_power: 23
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 3
++    mix_gain: 11
++    rf_power: 25
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 3
++    mix_gain: 12
++    rf_power: 26
++    dig_gain: 0
++    dac_gain: 3
++  - pa_gain: 3
++    mix_gain: 14
++    rf_power: 27
++    dig_gain: 0
++    dac_gain: 3
++  meshcore_usb:
++    auto_detect: false
++dashboard:
++  host: 0.0.0.0
++  port: 8080
++storage:
++  database_path: data/concentrator.db
++device:
++  device_id: null
++  device_name: Helium OG SX1301
++  hardware_description: Helium OG / RAK2247 SPI / SX1301 / Pi 3 B+
++  latitude: null
++  longitude: null
++  altitude: null
++transmit:
++  enabled: false
++  tx_power_dbm: 10
++  long_name: Helium OG SX1301
++  short_name: SX1
++  hop_limit: 1
++  max_duty_cycle_percent: 1
++  nodeinfo:
++    interval_minutes: 0
++  telemetry:
++    interval_minutes: 0
++  position:
++    interval_minutes: 0
++upstream:
++  enabled: false
++  auth_token: ''
++mqtt:
++  enabled: false
++relay:
++  enabled: false
++  max_relay_per_minute: 2
++  burst_size: 1
++  min_relay_rssi: -125
++  max_relay_rssi: -50
+diff --git a/docs/CONFIGURATION.md b/docs/CONFIGURATION.md
+index 4482ce6..425f2a0 100644
+--- a/docs/CONFIGURATION.md
++++ b/docs/CONFIGURATION.md
+@@ -431,10 +431,12 @@ limit.
+ 
+ ## Smart Relay
+ 
+-> **Status: experimental — native onboard relay added in v0.7.4.** When `transmit.enabled: true` the Meshpoint now relays through its own SX1302 concentrator using identity-preserving re-broadcast (original `source_id` and `packet_id` survive, only `hop_limit` is decremented). No second radio required. **Hardware validation is still in progress** — please report results in Discord or via a Github issue.
++> **Status: experimental — native onboard relay added in v0.7.4.** When `transmit.enabled: true` the Meshpoint now relays through its own SX1302 concentrator using identity-preserving re-broadcast (original `source_id` and `packet_id` survive, `hop_limit` is decremented and the relay-node byte identifies this transmitter). No second radio required. **Hardware validation is still in progress** — please report results in Discord or via a Github issue.
+ 
+ ### Native onboard relay (preferred)
+ 
++The experimental SX1301 backend keeps automatic relay disabled until hardware channel access/backoff is implemented and verified; see [its diagnostic guide](SX1301-EXPERIMENTAL.md). The SX1302 path described here remains separate.
++
+ Set both `transmit` and `relay` to enabled. The same SX1302 that handles outgoing messages re-broadcasts captured packets, sharing duty-cycle accounting so relay traffic can never crowd out user TX:
+ 
+ ```yaml
+@@ -480,6 +482,7 @@ Enable the Meshpoint to send messages directly through the onboard SX1302 concen
+ transmit:
+   enabled: false               # opt-in
+   node_id: null                # auto-generated 4-byte Meshtastic node ID
++  ok_to_mqtt: false             # consent for gateways to report our originated packets
+   tx_power_dbm: 14             # conservative default (dBm)
+   # max_duty_cycle_percent omitted: auto-derives from radio.region
+   long_name: "Meshpoint"
+@@ -491,6 +494,8 @@ transmit:
+ 
+ **`node_id`**: leave as `null` to auto-generate. Once set, do not change it: your node identity is what other nodes see and cache in their contact lists.
+ 
++**`ok_to_mqtt`**: opt-in consent for receiving gateways to upload locally originated Meshtastic packets. This sets the Data protobuf reporting bit; it does not enable Meshpoint MQTT, cloud sharing, or change relayed senders' encrypted payloads. Defaults to `false`.
++
+ **`tx_power_dbm`**: 14 dBm is conservative and compliant in most regions. Raise carefully; check your regional ISM band limits before increasing.
+ 
+ **`max_duty_cycle_percent`**: airtime limit as a percent of wall clock. Omit (or set to `null`) to auto-derive from `radio.region`: 10% in US/ANZ/KR/SG_923, 1% in EU_868/IN. Set explicitly in `local.yaml` to override (e.g. `25.0`). See `RADIO-CONFIG-EXPLAINED.md` for the full table and rationale.
+diff --git a/docs/SX1301-EXPERIMENTAL.md b/docs/SX1301-EXPERIMENTAL.md
+new file mode 100644
+index 0000000..ac63ac6
+--- /dev/null
++++ b/docs/SX1301-EXPERIMENTAL.md
+@@ -0,0 +1,137 @@
++# Experimental SX1301 backend
++
++This contribution adds an opt-in SX1301 adapter to the existing Meshpoint capture and transmit interfaces. SX1302 remains the default. It addresses the hardware-support request in [issue #91](https://github.com/KMX415/meshpoint/issues/91). This branch is local and has not been submitted upstream. AI assistance was used.
++
++## Hardware scope
++
++Validated hardware is an original Helium OG carrier, RAK2247 **SPI US915 / SX1301 / SX1257**, Raspberry Pi **3 Model B+**, running Debian 13 aarch64. The recovered carrier setup uses SPI0.0, BCM25 reset, RF1 as clock source and RSSI offset -166. Other SX1301 carriers must establish their own wiring and gain table.
++
++Only the single-SF IF8 modem is enabled: one frequency and one selected SF7–SF12 / 125, 250 or 500 kHz preset at a time. There is no eight-channel 250 kHz reception, spectral scan or automatic multi-preset operation. The current validation accepts US 902–928 MHz settings and Meshtastic sync word 0x2B only.
++
++The private C shim builds against Semtech HAL 5.0.1 headers and exposes a primitive, versioned ABI. It does not reuse SX1302 C structures. A lock serializes RX, TX and stop. RX requires valid CRC and valid metadata. TX requires explicit enablement and a carrier gain table, verifies parameters and power membership, and reports emission only after TX_EMITTING followed by TX_FREE. These observations do not measure RF output or demonstrate delivery to another radio.
++
++## Build and configuration
++
++Use a dedicated checkout and normal SPI/GPIO permissions. The upstream installer is unchanged and does not install this backend.
++
++The exact companion driver is published separately at
++[`79871283e08c45e89d1196a5469e1aa68f544e71`](https://github.com/flynnr2/lora_gateway/tree/79871283e08c45e89d1196a5469e1aa68f544e71).
++Review the [complete four-line timing diff against v5.0.1](https://github.com/flynnr2/lora_gateway/compare/a955619271b5d0a46d32e08150acfbc1eed183b7...79871283e08c45e89d1196a5469e1aa68f544e71).
++It is a separate experimental driver dependency, not vendored Meshpoint source.
++
++For a fresh Linux/Pi candidate, with a C toolchain, Git, Python 3 and Make:
++
++```sh
++git clone https://github.com/flynnr2/lora_gateway.git ~/lora_gateway_sx1301
++cd ~/lora_gateway_sx1301
++git checkout --detach 79871283e08c45e89d1196a5469e1aa68f544e71
++
++git clone https://github.com/flynnr2/meshpoint.git ~/meshpoint_sx1301_candidate
++cd ~/meshpoint_sx1301_candidate
++git checkout submission/sx1301-backend-20261025
++./scripts/build_sx1301_native.sh ~/lora_gateway_sx1301
++```
++
++The script rebuilds a position-independent HAL archive and writes checkout-local
++`build/libsx1301_meshpoint.so`, `build/sx1301-hal-revision.txt` and
++`build/sx1301-build-provenance.json`. It never replaces system libloragw. Native
++ABI **2** is required: older ABI-1 libraries are rejected and must be rebuilt.
++The manifest records all tracked HAL file hashes, revision, generated-config,
++archive, shim and library hashes, compiler versions/flags and the Meshpoint
++revision/status. Dirty tracked HAL files or additional untracked source/header
++inputs are rejected before building. Generated `libloragw/inc/config.h` is the
++only untracked header permitted; Make regenerates it during the forced build.
++Build without external Make/compiler flag overrides to reproduce this recipe.
++Retain the manifest with the hardware test results and verify the library path
++and hash actually mapped by the running process separately from the checkout.
++
++Stock HAL startup was unreliable on the tested board. Successful historical
++runs used the companion patch: 1 ms internal radio-SPI completion delays and
++10 ms MCU reset-release delays. Host SPI remains at the stock 8 MHz; the old
++directory name `lora_gateway_spi1mhz` was not evidence of its active bus speed.
++Neither the timing patch nor the rate difference from recovered Helium firmware
++establishes a universal hardware fix.
++
++Historical provenance limit: archived driver revision records identify 7987128,
++and the archived main `loragw_hal.c` SHA-256
++`14eaa8251e1bdddd51fea273a9b49278702522ae96a8f6480aa4e5ef0c92939a`
++matches that commit. The earlier records do not establish the absence of every
++uncommitted file throughout the historical HAL tree. A read-only re-audit on
++26 October was blocked by SSH authentication; no historical-clean-tree claim
++is made. The clean recipe above deliberately requires **no additional HAL
++patches**. Its revised ABI-2 candidate still needs a fresh Linux link/build and
++hardware validation; the old binary and RF results do not validate this revision.
++
++Install Meshpoint's Python requirements and obtain activation through the normal setup. Copy `config/sx1301-helium.example.yaml` to private `config/local.yaml`, preserving existing authentication fields on a configured system. Choose a unique device identity before enabling TX. The example disables TX, relay, periodic broadcasts, cloud publishing and MQTT; no credential or experiment-specific OG13 identity is included.
++
++The recovered gain table is carrier calibration input, not measured output or operating authorization. DAC gain 3 supplies the Semtech default omitted by the original firmware. Actual RF power, emissions and suitability of antenna/mode combinations require separate verification.
++
++## Integration and validation
++
++The adapter feeds the existing packet pipeline and native TX service; activation and authentication behavior are unchanged. Automatic SX1301 relay is rejected because hardware CAD/backoff is not implemented. A lock and duty budget do not replace carrier sensing. The optional explicit relay bench checks are maintained separately.
++
++Synthetic tests cover backend selection, ABI compatibility, RX conversion, bounded payloads, gain/power/frequency validation, disabled TX, HAL failures and serialized RX/TX. Existing SX1302 behavior stays on its original path. Passing these tests does not establish an SX1302 hardware regression result.
++
++Bench evidence includes decoded ambient Meshtastic packets and observed native transmissions. Independent RF returns and correlated traceroute replies were obtained by the separate HNTOG validation stack. Startup/calibration variability, RF output measurement, repeated cold boots and other carrier/region support remain open work.
++
++## Receive preamble correction
++
++Semtech HAL 5.0.1 leaves the single-SF service receiver preamble limit at 10
++(eight preamble symbols plus two sync symbols). Meshtastic's configured default
++is 16 preamble symbols. After each native start this backend writes the
++configured length plus two to SX1301 register 204 and verifies it by readback.
++A write error, read error or mismatch stops the concentrator and rejects startup.
++Configuration must fit the 16-bit register, including the two sync symbols.
++
++Controlled RAK2247/SX1301 results: TX8/RX10 received 6/6; reverting to
++TX16/RX10 received 0/2; TX16/RX18 received 4/4 across two initializations.
++The normal receiver subsequently received 2/2 from an independent native sender
++using TX16. These small trials validate the observed mismatch and correction on
++this board; they are not sensitivity or reliability estimates. The correction
++was exercised in the experiment integration; this isolated contribution has
++software checks and has not been newly installed as part of submission preparation.
++Do not transfer the SX1301 plus-two rule to SX1302 register semantics.
++
++Passive register diagnostics are raw, uncalibrated observations. In a separate
++five-minute observation, MODEM_STATUS remained zero during known receptions;
++zero status must not be interpreted as verified channel idle. This backend
++provides no hardware CAD or clear-channel guarantee.
++
++## Review follow-up: TX and airtime
++
++The configured `radio.preamble_length` now supplies both RX (plus two SX1301
++sync symbols), native TX, and the HAL airtime calculation. The ABI-2 configure
++call passes that value to the shim; TX packets with a different preamble are
++rejected. Bounds are 6 through 65533 symbols. Changing the preamble requires
++stop/configure/start, as with other radio settings.
++
++The Meshpoint TX service reserves the full calculated airtime **before** each
++SX1301 native dispatch. A rejection, completion/status failure after emission,
++unknown result, exception or cancellation retains the reservation. Successful
++sends are charged once, with no second success charge. Attempts rejected by the
++service duty-budget check never dispatch or incur a charge. A HAL airtime
++calculation error aborts before dispatch rather than falling back to a
++fixed-preamble estimate. This is conservative
++budget accounting, not evidence that every charged attempt emitted or delivered
++a frame. SX1302 retains its existing success-based accounting.
++
++For a repeatable native contract check without radio access, after installing
++Meshpoint's Python test requirements and checking out the pinned HAL above:
++
++```sh
++SX1301_HAL_DIR=~/lora_gateway_sx1301 python -m pytest \
++  tests/test_sx1301_backend.py tests/test_sx1301_native_contract.py \
++  tests/test_sx1301_build_provenance.py -q
++```
++
++The native check compiles the real shim against actual Semtech headers with a
++fake HAL. It exercises configured preamble/airtime, observed emission followed
++by status failure, timeout and rejected sends, and clearing stale emission
++state. It never links the hardware HAL or opens SPI/GPIO. Without
++`SX1301_HAL_DIR`, that optional native test reports a skip, not a hardware pass.
++
++## Contribution boundary
++
++This branch contains the hardware adapter, build helper, safe example configuration, integration hooks, hardware tests and this guide. It contains no experiment scheduler, OG13 announcements, reception-results dashboard, MQTT evidence watcher, traceroute scheduler, HNTOG user services, GNSS/chrony work or map artifacts.
++
++Generic Meshtastic radio-header and return-route decoding corrections have their own independently testable branch. HNTOG's integrated experiment branch combines that work with this adapter for validation. Those layers must not be submitted as one large hardware-support PR. Follow [CONTRIBUTING.md](../CONTRIBUTING.md), discuss the architecture with maintainers and identify hardware/region limits explicitly.
+diff --git a/scripts/build_sx1301_native.sh b/scripts/build_sx1301_native.sh
+new file mode 100755
+index 0000000..397ce49
+--- /dev/null
++++ b/scripts/build_sx1301_native.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -euo pipefail
++[[ $# == 1 ]] || { echo "Usage: $0 /path/to/lora_gateway" >&2; exit 2; }
++HAL_DIR=$(cd "$1" && pwd)
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++[[ $(cat "$HAL_DIR/VERSION") == 5.0.1 ]] || { echo 'SX1301 HAL 5.0.1 required' >&2; exit 1; }
++# Fail before compiling if tracked HAL source or untracked source inputs differ.
++# Generated build outputs are recorded separately, never treated as source commits.
++python3 "$ROOT/scripts/sx1301_build_provenance.py" check "$HAL_DIR"
++# Shared shim is private to this checkout. Never install/overwrite libloragw.so.
++make -C "$HAL_DIR/libloragw" -B libloragw.a DEBUG_HAL=1 DEBUG_REG=1 \
++    CFLAGS='-O2 -Wall -Wextra -std=c99 -fPIC -Iinc -I.'
++mkdir -p "$ROOT/build"
++"${CC:-cc}" -O2 -Wall -Wextra -Werror -std=c99 -fPIC -shared \
++    -I"$HAL_DIR/libloragw/inc" "$ROOT/scripts/sx1301_native.c" \
++    "$HAL_DIR/libloragw/libloragw.a" -lrt -lm -o "$ROOT/build/libsx1301_meshpoint.so"
++git -C "$HAL_DIR" rev-parse HEAD > "$ROOT/build/sx1301-hal-revision.txt"
++python3 "$ROOT/scripts/sx1301_build_provenance.py" record "$HAL_DIR" "$ROOT" "${CC:-cc}"
++echo "Built $ROOT/build/libsx1301_meshpoint.so (native ABI 2; see sx1301-build-provenance.json)"
+diff --git a/scripts/sx1301_build_provenance.py b/scripts/sx1301_build_provenance.py
+new file mode 100644
+index 0000000..52ab0c4
+--- /dev/null
++++ b/scripts/sx1301_build_provenance.py
+@@ -0,0 +1,67 @@
++#!/usr/bin/env python3
++"""Reject uncommitted HAL inputs and record a checkout-local build manifest."""
++import hashlib
++import json
++import platform
++import subprocess
++import sys
++from pathlib import Path
++
++
++def git(hal, *args):
++    return subprocess.check_output(["git", "-C", str(hal), *args])
++
++
++def check(hal):
++    if git(hal, "status", "--porcelain", "--untracked-files=no").strip():
++        raise SystemExit("HAL tracked files must be clean; commit source changes before building")
++    others = git(hal, "ls-files", "--others", "-z").decode().split("\0")
++    source = [p for p in others if p and Path(p).suffix in (".c", ".h", ".var", ".cfg")
++              and p != "libloragw/inc/config.h"]
++    if source:
++        raise SystemExit("Untracked HAL source inputs must be committed: " + ", ".join(source))
++
++
++def sha(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def main():
++    mode, hal = sys.argv[1], Path(sys.argv[2]).resolve()
++    check(hal)
++    if mode == "check":
++        return
++    if mode != "record":
++        raise SystemExit("Expected check or record")
++    root, compiler = Path(sys.argv[3]).resolve(), sys.argv[4]
++    paths = git(hal, "ls-files", "-z").decode().split("\0")
++    files = {p: sha(hal / p) for p in paths if p}
++    document = {
++        "native_abi": 2,
++        "build_platform": platform.platform(),
++        "hal_revision": git(hal, "rev-parse", "HEAD").decode().strip(),
++        "hal_tracked_clean": True,
++        "hal_untracked_source_inputs": [],
++        "hal_tracked_sha256": files,
++        "hal_generated_config_sha256": sha(hal / "libloragw/inc/config.h"),
++        "hal_archive_sha256": sha(hal / "libloragw/libloragw.a"),
++        "meshpoint_revision": git(root, "rev-parse", "HEAD").decode().strip(),
++        "meshpoint_tracked_status": git(root, "status", "--porcelain", "--untracked-files=no").decode(),
++        "shim_sha256": sha(root / "scripts/sx1301_native.c"),
++        "build_script_sha256": sha(root / "scripts/build_sx1301_native.sh"),
++        "library_sha256": sha(root / "build/libsx1301_meshpoint.so"),
++        "shim_compiler": compiler,
++        "shim_compiler_version": subprocess.check_output([compiler, "--version"], text=True).splitlines()[0],
++        "hal_compiler": "gcc (Semtech Makefile default; no CROSS_COMPILE override)",
++        "hal_compiler_version": subprocess.check_output(["gcc", "--version"], text=True).splitlines()[0],
++        "hal_debug_options": {"DEBUG_HAL": 1, "DEBUG_REG": 1},
++        "hal_cflags": "-O2 -Wall -Wextra -std=c99 -fPIC -Iinc -I.",
++        "shim_cflags": "-O2 -Wall -Wextra -Werror -std=c99 -fPIC -shared",
++        "shim_ldflags": "-lrt -lm",
++        "host_spi_hz": 8000000,
++    }
++    (root / "build/sx1301-build-provenance.json").write_text(json.dumps(document, indent=2) + "\n")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/sx1301_native.c b/scripts/sx1301_native.c
+new file mode 100644
+index 0000000..635b863
+--- /dev/null
++++ b/scripts/sx1301_native.c
+@@ -0,0 +1,197 @@
++/* SPDX-License-Identifier: AGPL-3.0-only
++ * Small stable ABI over Semtech SX1301 HAL 5.0.1. HAL structs stay in C.
++ * One process owns one concentrator; the Python caller serializes every call.
++ */
++#include <stdbool.h>
++#include <stdint.h>
++#include <math.h>
++#include <string.h>
++#include <stdio.h>
++#include "loragw_hal.h"
++#include "loragw_reg.h"
++#include "loragw_aux.h"
++
++static struct lgw_pkt_rx_s rx[LGW_PKT_FIFO_SIZE];
++static struct lgw_tx_gain_lut_s gains;
++static unsigned count, bad_crc, no_crc;
++static uint32_t frequency, rate;
++static uint8_t bandwidth;
++static uint16_t preamble_length;
++static bool started, transmit;
++static int last_tx_observed;
++
++int mp1301_abi_version(void) { return 2; }
++int mp1301_last_tx_observed(void) { return last_tx_observed; }
++unsigned mp1301_crc_bad(void) { return bad_crc; }
++unsigned mp1301_no_crc(void) { return no_crc; }
++
++/* Passive, uncalibrated diagnostics for channel-access development.
++ * These registers do NOT constitute a CAD/clear-channel API. In particular,
++ * CHANN_RSSI's selected path is not assumed to be the active standard modem.
++ * Caller must hold the same serialization lock used for receive/send.
++ */
++int mp1301_channel_diagnostics(int32_t *values, unsigned capacity) {
++    static const uint16_t ids[] = {
++        LGW_MODEM_STATUS, LGW_VALID_HEADER_COUNTER_MBWSSF,
++        LGW_VALID_PACKET_COUNTER_MBWSSF, LGW_CHANN_RSSI,
++        LGW_BB_RSSI, LGW_DEC_RSSI, LGW_CHANN_SELECT_RSSI,
++        LGW_MBWSSF_RADIO_SELECT,
++    };
++    if (!started || !values || capacity < sizeof(ids) / sizeof(ids[0])) return -1;
++    for (unsigned i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
++        if (lgw_reg_r(ids[i], &values[i])) return -1;
++    }
++    return 0;
++}
++
++int mp1301_configure(uint32_t hz, int sf, int bw, int clock_source, int tx, int preamble) {
++    if (started || hz < 902000000 || hz > 928000000 || sf < 7 || sf > 12 ||
++        (bw != 125 && bw != 250 && bw != 500) ||
++        (clock_source != 0 && clock_source != 1) || (tx != 0 && tx != 1) ||
++        preamble < 6 || preamble > 65533) return -1;
++    frequency = hz;
++    rate = 1U << (sf - 6);
++    bandwidth = bw == 125 ? BW_125KHZ : bw == 250 ? BW_250KHZ : BW_500KHZ;
++    transmit = tx;
++    preamble_length = (uint16_t)preamble;
++    count = bad_crc = no_crc = 0;
++    memset(&gains, 0, sizeof(gains));
++    struct lgw_conf_board_s board = {.lorawan_public = false, .clksrc = clock_source};
++    if (lgw_board_setconf(board)) return -1;
++    for (unsigned i = 0; i < LGW_RF_CHAIN_NB; i++) {
++        struct lgw_conf_rxrf_s rf = {
++            /* Radio 1 supplies the clock but has no enabled IF channels.
++             * Keep its recovered Helium US center away from the wanted RF0
++             * carrier, matching the recovered clock-chain configuration.
++             */
++            .enable = true, .freq_hz = i == 0 ? hz : 905000000, .rssi_offset = -166.0f,
++            .type = LGW_RADIO_TYPE_SX1257, .tx_enable = tx && i == 0,
++            .tx_notch_freq = 129000,
++        };
++        if (lgw_rxrf_setconf(i, rf)) return -1;
++    }
++    for (unsigned i = 0; i < LGW_IF_CHAIN_NB; i++) {
++        struct lgw_conf_rxif_s channel = {0};
++        if (i == 8) {
++            channel.enable = true;
++            channel.rf_chain = 0;
++            channel.bandwidth = bandwidth;
++            channel.datarate = rate;
++        }
++        if (lgw_rxif_setconf(i, channel)) return -1;
++    }
++    return 0;
++}
++
++int mp1301_add_gain(int dig, int pa, int dac, int mix, int power) {
++    if (started || gains.size >= TX_GAIN_LUT_SIZE_MAX || dig < 0 || dig > 3 ||
++        pa < 0 || pa > 3 || dac != 3 || mix < 8 || mix > 15 ||
++        power < -20 || power > 27 ||
++        (gains.size && power <= gains.lut[gains.size - 1].rf_power)) return -1;
++    gains.lut[gains.size++] = (struct lgw_tx_gain_s){
++        .dig_gain = dig, .pa_gain = pa, .dac_gain = dac,
++        .mix_gain = mix, .rf_power = power,
++    };
++    return 0;
++}
++
++static int verified_write(uint16_t id, int32_t value) {
++    int32_t actual = -1;
++    return lgw_reg_w(id, value) || lgw_reg_r(id, &actual) || actual != value ? -1 : 0;
++}
++
++int mp1301_stop(void) {
++    int result = lgw_stop();
++    started = false;
++    return result;
++}
++
++int mp1301_start(void) {
++    if (started || (transmit && (!gains.size || lgw_txgain_setconf(&gains)))) return -1;
++    if (lgw_start()) { mp1301_stop(); return -1; }
++    if (verified_write(LGW_FRAME_SYNCH_PEAK1_POS, 2) ||
++        verified_write(LGW_FRAME_SYNCH_PEAK2_POS, 11) ||
++        verified_write(LGW_MBWSSF_FRAME_SYNCH_PEAK1_POS, 2) ||
++        verified_write(LGW_MBWSSF_FRAME_SYNCH_PEAK2_POS, 11) ||
++        (transmit && (verified_write(LGW_TX_FRAME_SYNCH_PEAK1_POS, 2) ||
++                      verified_write(LGW_TX_FRAME_SYNCH_PEAK2_POS, 11)))) {
++        mp1301_stop(); return -1;
++    }
++    started = true;
++    return 0;
++}
++
++int mp1301_receive(void) {
++    if (!started) return -1;
++    int n = lgw_receive(LGW_PKT_FIFO_SIZE, rx);
++    if (n < 0 || n > LGW_PKT_FIFO_SIZE) return -1;
++    count = 0;
++    for (int i = 0; i < n; i++) {
++        struct lgw_pkt_rx_s p = rx[i];
++        if (p.status == STAT_CRC_BAD) { bad_crc++; continue; }
++        if (p.status == STAT_NO_CRC) { no_crc++; continue; }
++        if (p.status != STAT_CRC_OK || p.modulation != MOD_LORA || p.if_chain != 8 ||
++            !p.size || p.size > 255 || !isfinite(p.rssi) || !isfinite(p.snr)) continue;
++        rx[count++] = p;
++    }
++    return count;
++}
++
++int mp1301_packet(unsigned index, uint8_t *payload, unsigned capacity,
++                  uint32_t *hz, uint32_t *ticks, int *sf, int *bw,
++                  float *rssi, float *snr, int *cr) {
++    if (index >= count || !payload || capacity < rx[index].size ||
++        !hz || !ticks || !sf || !bw || !rssi || !snr || !cr) return -1;
++    const struct lgw_pkt_rx_s *p = &rx[index];
++    int actual_sf = 7;
++    while (actual_sf <= 12 && p->datarate != (1U << (actual_sf - 6))) actual_sf++;
++    if (actual_sf > 12 || (p->bandwidth != BW_125KHZ && p->bandwidth != BW_250KHZ &&
++        p->bandwidth != BW_500KHZ) || p->coderate < 1 || p->coderate > 4) return -1;
++    memcpy(payload, p->payload, p->size);
++    *hz = p->freq_hz; *ticks = p->count_us; *sf = actual_sf;
++    *bw = p->bandwidth == BW_125KHZ ? 125 : p->bandwidth == BW_250KHZ ? 250 : 500;
++    *rssi = p->rssi; *snr = p->snr; *cr = p->coderate;
++    return p->size;
++}
++
++static int tx_packet(struct lgw_pkt_tx_s *p, const uint8_t *payload,
++                     unsigned size, int power, int cr) {
++    if (!payload || size < 16 || size > 255 || cr < 1 || cr > 4) return -1;
++    memset(p, 0, sizeof(*p));
++    p->freq_hz = frequency; p->tx_mode = IMMEDIATE; p->rf_chain = 0;
++    p->rf_power = power; p->modulation = MOD_LORA;
++    p->bandwidth = bandwidth; p->datarate = rate; p->coderate = cr;
++    p->preamble = preamble_length; p->size = size;
++    memcpy(p->payload, payload, size);
++    return 0;
++}
++
++int mp1301_airtime(const uint8_t *payload, unsigned size, int power, int cr) {
++    struct lgw_pkt_tx_s p;
++    if (tx_packet(&p, payload, size, power, cr)) return -1;
++    return lgw_time_on_air(&p);
++}
++
++int mp1301_tx_status(void) {
++    uint8_t status;
++    return !started || lgw_status(TX_STATUS, &status) ? -1 : status;
++}
++
++int mp1301_send(const uint8_t *payload, unsigned size, int power, int cr) {
++    last_tx_observed = 0;
++    if (!started || !transmit || mp1301_tx_status() != TX_FREE) return -1;
++    bool found = false;
++    for (unsigned i = 0; i < gains.size; i++) if (gains.lut[i].rf_power == power) found = true;
++    struct lgw_pkt_tx_s p;
++    if (!found || tx_packet(&p, payload, size, power, cr) || lgw_send(p)) return -1;
++    /* HAL acceptance alone is not completion. Observe emission and return to idle. */
++    unsigned limit = lgw_time_on_air(&p) + 2000;
++    for (unsigned elapsed = 0; elapsed < limit; elapsed += 5) {
++        wait_ms(5);
++        int status = mp1301_tx_status();
++        if (status < 0) return -1;
++        if (status == TX_EMITTING) last_tx_observed = 1;
++        if (status == TX_FREE) return last_tx_observed ? 0 : -1;
++    }
++    return -1;
++}
+diff --git a/src/api/server.py b/src/api/server.py
+index 8998224..844dec7 100644
+--- a/src/api/server.py
++++ b/src/api/server.py
+@@ -400,6 +400,12 @@ def _add_serial_source(coordinator: PipelineCoordinator, config: AppConfig):
+ def _add_concentrator_source(
+     coordinator: PipelineCoordinator, config: AppConfig
+ ):
++    if config.capture.concentrator_backend == "sx1301":
++        from src.capture.sx1301_source import SX1301CaptureSource
++        coordinator.capture_coordinator.add_source(SX1301CaptureSource(config))
++        return
++    if config.capture.concentrator_backend != "sx1302":
++        raise ValueError("Unknown concentrator backend")
+     try:
+         from src.capture.concentrator_source import ConcentratorCaptureSource
+         coordinator.capture_coordinator.add_source(
+@@ -717,7 +723,7 @@ def _build_tx_service(
+ def _wire_native_relay(
+     coord: PipelineCoordinator, tx_service: TxService | None
+ ) -> None:
+-    """Hook the native onboard SX1302 path into the relay manager.
++    """Hook the selected native onboard radio into the relay manager.
+ 
+     When ``transmit.enabled`` is true the onboard radio is the
+     preferred relay backend: it preserves the original sender's
+@@ -733,6 +739,11 @@ def _wire_native_relay(
+     if tx_service is None or not tx_service.meshtastic_enabled:
+         return
+     relay = coord.relay_manager
++    wrapper = _get_concentrator_wrapper(coord)
++    if getattr(wrapper, "hardware_backend", None) == "sx1301":
++        relay.enabled = False
++        logger.warning("Automatic SX1301 relay disabled: hardware CAD/backoff is not implemented")
++        return
+     if not relay.enabled:
+         return
+ 
+@@ -751,7 +762,7 @@ def _wire_native_relay(
+     relay.set_transmit_function(_native_relay)
+     relay.set_local_node_id(f"{tx_service.source_node_id:08x}")
+     logger.info(
+-        "Relay backend: native onboard SX1302 (identity-preserving)"
++        "Relay backend: native onboard concentrator (identity-preserving)"
+     )
+ 
+ 
+@@ -832,6 +843,9 @@ def _inject_tx_gain_into_source(coord: PipelineCoordinator) -> None:
+     conc_source = _find_concentrator_source(coord)
+     if conc_source is None:
+         return
++    if getattr(conc_source._wrapper, "hardware_backend", None) == "sx1301":
++        # Its own start path supplies the carrier's SX1301 gain table.
++        return
+ 
+     async def _start_with_tx_gain() -> None:
+         conc_source._wrapper.load()
+diff --git a/src/capture/sx1301_source.py b/src/capture/sx1301_source.py
+new file mode 100644
+index 0000000..3a69a5e
+--- /dev/null
++++ b/src/capture/sx1301_source.py
+@@ -0,0 +1,87 @@
++"""Opt-in single-modem SX1301 source for the existing Meshpoint pipeline."""
++from __future__ import annotations
++
++import asyncio
++import logging
++from datetime import datetime, timezone
++
++from src.capture.base import CaptureSource
++from src.hal.sx1301_wrapper import SX1301Wrapper
++from src.models.packet import Protocol, RawCapture
++from src.models.signal import SignalMetrics
++
++logger = logging.getLogger(__name__)
++
++
++class SX1301CaptureSource(CaptureSource):
++    def __init__(self, config):
++        self._radio = config.radio
++        self._transmit = config.transmit.enabled
++        cap = config.capture
++        self._wrapper = SX1301Wrapper(cap.sx1301_lib_path, cap.sx1301_reset_gpio,
++                                    cap.sx1301_clksrc, cap.sx1301_tx_gain_lut)
++        self._running = False
++        self._restart_lock = asyncio.Lock()
++        self._raw_observers = []
++
++    def on_raw_capture(self, callback):
++        """Observe every CRC-valid native frame before decoder filtering."""
++        self._raw_observers.append(callback)
++
++    @property
++    def name(self):
++        return "concentrator"
++
++    @property
++    def is_running(self):
++        return self._running
++
++    @property
++    def rx_crc_stats(self):
++        return self._wrapper.crc_bad_count, self._wrapper.no_crc_count
++
++    async def start(self):
++        def initialize():
++            self._wrapper.load()
++            self._wrapper.reset()
++            self._wrapper.configure(self._radio, self._transmit)
++            self._wrapper.start()
++        await asyncio.to_thread(initialize)
++        self._running = True
++        logger.info("SX1301 started: single SF%s / %skHz at %s MHz; TX=%s",
++                    self._radio.spreading_factor, self._radio.bandwidth_khz,
++                    self._radio.frequency_mhz, self._transmit)
++
++    async def stop(self):
++        self._running = False
++        await asyncio.to_thread(self._wrapper.stop)
++
++    async def restart_pipeline(self):
++        async with self._restart_lock:
++            await self.stop()
++            await self.start()
++
++    async def packets(self):
++        while self._running:
++            try:
++                packets = await asyncio.to_thread(self._wrapper.receive)
++            except Exception:
++                self._running = False
++                await asyncio.to_thread(self._wrapper.stop)
++                raise
++            for p in packets:
++                observed = datetime.now(timezone.utc)
++                raw = RawCapture(payload=p["payload"],
++                    signal=SignalMetrics(rssi=p["rssi"], snr=p["snr"],
++                        frequency_mhz=p["frequency_hz"] / 1e6,
++                        spreading_factor=p["spreading_factor"],
++                        bandwidth_khz=p["bandwidth_khz"], coding_rate=f"4/{p['coderate'] + 4}",
++                        timestamp=observed), capture_source=self.name,
++                    timestamp=observed, protocol_hint=Protocol.MESHTASTIC)
++                for callback in self._raw_observers:
++                    try:
++                        callback(raw)
++                    except Exception:
++                        logger.exception('SX1301 raw observer failed')
++                yield raw
++            await asyncio.sleep(0.01)
+diff --git a/src/config.py b/src/config.py
+index ecf6ba9..8d61c00 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -135,6 +135,11 @@ class CaptureConfig:
+     serial_baud: int = 115200
+     serial: list[SerialDeviceConfig] = field(default_factory=list)
+     concentrator_spi_device: str = "/dev/spidev0.0"
++    concentrator_backend: str = "sx1302"
++    sx1301_lib_path: str = "build/libsx1301_meshpoint.so"
++    sx1301_reset_gpio: int = 25
++    sx1301_clksrc: int = 1
++    sx1301_tx_gain_lut: list[dict] = field(default_factory=list)
+     meshcore_usb: MeshcoreUsbConfig = field(default_factory=MeshcoreUsbConfig)
+ 
+ 
+diff --git a/src/coordinator.py b/src/coordinator.py
+index 6dc1b13..99a895f 100644
+--- a/src/coordinator.py
++++ b/src/coordinator.py
+@@ -27,7 +27,7 @@ from src.storage.telemetry_repository import TelemetryRepository
+ logger = logging.getLogger(__name__)
+ 
+ _SOURCE_LABELS = {
+-    "concentrator": "concentrator (8-ch SX1302)",
++    "concentrator": "concentrator",
+     "serial": "serial radio",
+     "meshcore_usb": "MeshCore USB node",
+     "mock": "mock source",
+diff --git a/src/hal/sx1301_wrapper.py b/src/hal/sx1301_wrapper.py
+new file mode 100644
+index 0000000..51ae2e4
+--- /dev/null
++++ b/src/hal/sx1301_wrapper.py
+@@ -0,0 +1,230 @@
++"""SX1301-only native shim. No SX1302 structs or register enums cross this ABI."""
++from __future__ import annotations
++
++import ctypes as c
++import subprocess
++import threading
++import time
++from dataclasses import dataclass
++from pathlib import Path
++
++
++@dataclass(frozen=True)
++class SX1301TxPacket:
++    payload: bytes
++    freq_hz: int
++    datarate: int
++    bandwidth: int
++    coderate: int
++    rf_power: int
++    preamble: int = 16
++    no_crc: bool = False
++    no_header: bool = False
++    invert_pol: bool = False
++
++    @property
++    def size(self):
++        return len(self.payload)
++
++
++class SX1301Wrapper:
++    """Serialize RX/TX and cleanup against a private, matching-header C shim."""
++
++    spectral_scan_supported = False
++    hardware_backend = "sx1301"
++
++    def __init__(self, lib_path, reset_gpio=25, clksrc=1, tx_gain_lut=None):
++        self._path = Path(lib_path).resolve()
++        if not 0 <= reset_gpio <= 27 or clksrc not in (0, 1):
++            raise ValueError("Invalid SX1301 reset GPIO or clock source")
++        self._gpio, self._clksrc = reset_gpio, clksrc
++        self._gains = tx_gain_lut or []
++        self._lib = None
++        self._lock = threading.RLock()
++        self._started = False
++        self._radio = None
++        self._tx = False
++
++    def load(self):
++        if self._lib is not None:
++            return
++        lib = c.CDLL(str(self._path))
++        functions = {
++            "mp1301_abi_version": ([], c.c_int),
++            "mp1301_configure": ([c.c_uint32] + [c.c_int] * 5, c.c_int),
++            "mp1301_add_gain": ([c.c_int] * 5, c.c_int),
++            "mp1301_start": ([], c.c_int), "mp1301_stop": ([], c.c_int),
++            "mp1301_receive": ([], c.c_int),
++            "mp1301_packet": ([c.c_uint, c.POINTER(c.c_ubyte), c.c_uint,
++                c.POINTER(c.c_uint32), c.POINTER(c.c_uint32),
++                c.POINTER(c.c_int), c.POINTER(c.c_int),
++                c.POINTER(c.c_float), c.POINTER(c.c_float), c.POINTER(c.c_int)], c.c_int),
++            "mp1301_send": ([c.POINTER(c.c_ubyte), c.c_uint, c.c_int, c.c_int], c.c_int),
++            "mp1301_airtime": ([c.POINTER(c.c_ubyte), c.c_uint, c.c_int, c.c_int], c.c_int),
++            "mp1301_tx_status": ([], c.c_int),
++            "mp1301_last_tx_observed": ([], c.c_int),
++            "mp1301_crc_bad": ([], c.c_uint), "mp1301_no_crc": ([], c.c_uint),
++        }
++        for name, (args, result) in functions.items():
++            fn = getattr(lib, name)
++            fn.argtypes, fn.restype = args, result
++        if lib.mp1301_abi_version() != 2:
++            raise RuntimeError("Incompatible SX1301 native shim ABI")
++        # Additive diagnostic export: not a channel-clear decision.
++        diagnostics = getattr(lib, "mp1301_channel_diagnostics", None)
++        if diagnostics is not None:
++            diagnostics.argtypes = [c.POINTER(c.c_int32), c.c_uint]
++            diagnostics.restype = c.c_int
++        self._lib = lib
++
++    def reset(self):
++        with self._lock:
++            if self._started:
++                raise RuntimeError("Stop SX1301 before GPIO reset")
++            for level in ("dl", "dh", "dl"):
++                subprocess.run(["pinctrl", "set", str(self._gpio), "op", level],
++                               check=True, capture_output=True)
++                time.sleep(0.1)
++
++    def configure(self, radio, transmit_enabled=False):
++        if radio.region != "US" or radio.sync_word != 0x2B:
++            raise ValueError("Experimental RAK2247 backend supports US / sync 0x2B only")
++        hz, bw, sf = int(radio.frequency_mhz * 1e6), int(radio.bandwidth_khz), radio.spreading_factor
++        if bw not in (125, 250, 500) or not 7 <= sf <= 12:
++            raise ValueError("Unsupported SX1301 bandwidth/spreading factor")
++        if not 902000000 + bw * 500 <= hz <= 928000000 - bw * 500:
++            raise ValueError("SX1301 channel extends outside US band")
++        if transmit_enabled and not self._gains:
++            raise ValueError("SX1301 TX requires the verified carrier gain table")
++        if not isinstance(radio.preamble_length, int) or not 6 <= radio.preamble_length <= 65533:
++            raise ValueError("SX1301 receive preamble must fit the 16-bit register including sync symbols")
++
++        with self._lock:
++            if self._lib.mp1301_configure(
++                hz, sf, bw, self._clksrc, int(transmit_enabled), radio.preamble_length
++            ):
++                raise RuntimeError("SX1301 configuration failed")
++            for gain in self._gains:
++                if self._lib.mp1301_add_gain(*(gain[k] for k in
++                    ("dig_gain", "pa_gain", "dac_gain", "mix_gain", "rf_power"))):
++                    raise ValueError("Invalid SX1301 TX gain table")
++            self._radio, self._tx = radio, transmit_enabled
++
++    def start(self):
++        with self._lock:
++            if self._lib.mp1301_start():
++                raise RuntimeError("SX1301 startup or sync-word verification failed")
++            # HAL5.0.1 leaves the service receiver at 10 symbols (8+2).
++            # Match the configured preamble; the register includes both sync symbols.
++            expected = self._radio.preamble_length + 2
++            write, read = self._lib.lgw_reg_w, self._lib.lgw_reg_r
++            write.argtypes, write.restype = [c.c_uint16, c.c_int32], c.c_int
++            read.argtypes, read.restype = [c.c_uint16, c.POINTER(c.c_int32)], c.c_int
++            actual = c.c_int32()
++            if write(204, expected) or read(204, c.byref(actual)) or actual.value != expected:
++                self._lib.mp1301_stop()
++                raise RuntimeError("SX1301 receive preamble verification failed")
++            self._started = True
++
++    def stop(self):
++        with self._lock:
++            if self._started:
++                self._started = False
++                if self._lib.mp1301_stop():
++                    raise RuntimeError("SX1301 cleanup failed")
++
++    @property
++    def crc_bad_count(self):
++        with self._lock:
++            return self._lib.mp1301_crc_bad() if self._lib else 0
++
++    @property
++    def no_crc_count(self):
++        with self._lock:
++            return self._lib.mp1301_no_crc() if self._lib else 0
++
++    def receive(self):
++        with self._lock:
++            n = self._lib.mp1301_receive()
++            if n < 0 or n > 16:
++                raise RuntimeError("SX1301 receive failed")
++            result = []
++            for i in range(n):
++                payload = (c.c_ubyte * 256)()
++                hz, ticks = c.c_uint32(), c.c_uint32()
++                sf, bw, cr = c.c_int(), c.c_int(), c.c_int()
++                rssi, snr = c.c_float(), c.c_float()
++                size = self._lib.mp1301_packet(i, payload, 256, c.byref(hz), c.byref(ticks),
++                    c.byref(sf), c.byref(bw), c.byref(rssi), c.byref(snr), c.byref(cr))
++                if size < 1 or size > 255:
++                    raise RuntimeError("Invalid SX1301 native packet")
++                result.append(dict(payload=bytes(payload[:size]), frequency_hz=hz.value,
++                    timestamp_us=ticks.value, spreading_factor=sf.value,
++                    bandwidth_khz=bw.value, coderate=cr.value, rssi=rssi.value, snr=snr.value))
++            return result
++
++    def read_channel_diagnostics(self):
++        """Read raw registers under RX/TX ownership; never infer channel clear.
++
++        RSSI units/path, status bits, update latency and weak-signal detection
++        need independent validation for the configured standard LoRa modem.
++        Missing/failed diagnostics are errors, never an idle-channel result.
++        """
++        names = ("modem_status", "valid_headers_std", "valid_packets_std",
++                 "channel_rssi_raw", "baseband_rssi_raw", "decimator_rssi_raw",
++                 "rssi_channel_selection", "std_radio_selection")
++        with self._lock:
++            if not self._started:
++                raise RuntimeError("SX1301 is not running")
++            read = getattr(self._lib, "mp1301_channel_diagnostics", None)
++            if read is None:
++                raise NotImplementedError("Native library lacks passive diagnostics")
++            values = (c.c_int32 * len(names))()
++            before = time.monotonic()
++            if read(values, len(names)):
++                raise RuntimeError("SX1301 diagnostic register read failed")
++            return dict(registers=dict(zip(names, values)),
++                        monotonic_before=before, monotonic_after=time.monotonic(),
++                        channel_clear=None, calibrated=False)
++
++    def build_tx_packet(self, payload, radio, config):
++        packet = SX1301TxPacket(bytes(payload), int(radio.frequency_mhz * 1e6),
++            radio.spreading_factor, int(radio.bandwidth_khz),
++            int(radio.coding_rate.split("/")[1]) - 4, config.tx_power_dbm,
++            preamble=radio.preamble_length)
++        self._validate_packet(packet)
++        return packet
++
++    def _validate_packet(self, p):
++        if not isinstance(p, SX1301TxPacket) or not 16 <= p.size <= 255:
++            raise ValueError("Invalid SX1301 TX packet")
++        r = self._radio
++        if r is None or (p.freq_hz, p.datarate, p.bandwidth, p.preamble) != (
++            int(r.frequency_mhz * 1e6), r.spreading_factor, int(r.bandwidth_khz), r.preamble_length):
++            raise ValueError("SX1301 TX must match configured receiver")
++        if p.rf_power not in {g["rf_power"] for g in self._gains} or not 1 <= p.coderate <= 4:
++            raise ValueError("Unsupported SX1301 power or coding rate")
++
++    def _tx_call(self, name, packet):
++        self._validate_packet(packet)
++        payload = (c.c_ubyte * packet.size).from_buffer_copy(packet.payload)
++        return getattr(self._lib, name)(payload, packet.size, packet.rf_power, packet.coderate)
++
++    def send(self, packet):
++        with self._lock:
++            if not self._started or not self._tx:
++                return -1
++            return self._tx_call("mp1301_send", packet)
++
++    def get_tx_status(self, rf_chain=0):
++        if rf_chain != 0:
++            raise ValueError("SX1301 TX uses RF chain 0")
++        with self._lock:
++            return self._lib.mp1301_tx_status()
++
++    def get_time_on_air(self, packet):
++        with self._lock:
++            value = self._tx_call("mp1301_airtime", packet)
++            if value <= 0:
++                raise RuntimeError("SX1301 airtime calculation failed")
++            return value
+diff --git a/src/log_format.py b/src/log_format.py
+index 4cea841..6cca895 100644
+--- a/src/log_format.py
++++ b/src/log_format.py
+@@ -260,7 +260,9 @@ _SOURCE_DESCRIPTIONS = {
+ def _describe_sources(config: AppConfig) -> str:
+     """Build a human-readable source list for the startup banner."""
+     parts = [
+-        _SOURCE_DESCRIPTIONS.get(s, s) for s in config.capture.sources
++        "concentrator (SX1301 single modem)"
++        if s == "concentrator" and config.capture.concentrator_backend == "sx1301"
++        else _SOURCE_DESCRIPTIONS.get(s, s) for s in config.capture.sources
+     ]
+     if (
+         "meshcore_usb" not in config.capture.sources
+diff --git a/src/main.py b/src/main.py
+index faf76e1..9e9698e 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -46,6 +46,12 @@ def _add_serial_source(coordinator: PipelineCoordinator, config) -> None:
+ 
+ 
+ def _add_concentrator_source(coordinator: PipelineCoordinator, config) -> None:
++    if config.capture.concentrator_backend == "sx1301":
++        from src.capture.sx1301_source import SX1301CaptureSource
++        coordinator.capture_coordinator.add_source(SX1301CaptureSource(config))
++        return
++    if config.capture.concentrator_backend != "sx1302":
++        raise ValueError("Unknown concentrator backend")
+     try:
+         from src.capture.concentrator_source import ConcentratorCaptureSource
+         coordinator.capture_coordinator.add_source(
+diff --git a/src/transmit/tx_service.py b/src/transmit/tx_service.py
+index d90c7a7..24dc1e6 100644
+--- a/src/transmit/tx_service.py
++++ b/src/transmit/tx_service.py
+@@ -254,10 +254,8 @@ class TxService:
+                 airtime_ms=airtime_ms,
+             )
+ 
+-        result_code = await asyncio.to_thread(self._wrapper.send, tx_pkt)
++        result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+         if result_code == 0:
+-            if self._duty:
+-                self._duty.record_tx(airtime_ms)
+             return SendResult(
+                 success=True,
+                 protocol="meshtastic",
+@@ -392,7 +390,7 @@ class TxService:
+         pre_status = await asyncio.to_thread(self._wrapper.get_tx_status, 0)
+         logger.info("TX status before send: %d", pre_status)
+ 
+-        result_code = await asyncio.to_thread(self._wrapper.send, tx_pkt)
++        result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+ 
+         if result_code == 0:
+             for delay in (0.05, 0.1, 0.5, 1.0):
+@@ -402,8 +400,6 @@ class TxService:
+                 if st == 2:
+                     break
+ 
+-            if self._duty:
+-                self._duty.record_tx(airtime_ms)
+             return SendResult(
+                 success=True,
+                 protocol="meshtastic",
+@@ -709,10 +705,8 @@ class TxService:
+                 airtime_ms=airtime_ms,
+             )
+ 
+-        result_code = await asyncio.to_thread(self._wrapper.send, tx_pkt)
++        result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+         if result_code == 0:
+-            if self._duty:
+-                self._duty.record_tx(airtime_ms)
+             logger.info("TX %s OK: id=%08x airtime=%dms", label, packet_id, airtime_ms)
+             return SendResult(
+                 success=True,
+@@ -789,12 +783,8 @@ class TxService:
+             hop_limit, hop_limit - 1, len(new_packet_bytes), airtime_ms,
+         )
+ 
+-        result_code = await asyncio.to_thread(
+-            self._wrapper.send, tx_pkt
+-        )
++        result_code = await self._send_with_airtime_accounting(tx_pkt, airtime_ms)
+         if result_code == 0:
+-            if self._duty:
+-                self._duty.record_tx(airtime_ms)
+             return SendResult(
+                 success=True,
+                 protocol="meshtastic",
+@@ -859,6 +849,10 @@ class TxService:
+ 
+     def _build_hal_packet(self, packet_bytes: bytes):
+         """Populate a LgwPktTxS struct from raw packet bytes."""
++        if getattr(self._wrapper, "hardware_backend", None) == "sx1301":
++            return self._wrapper.build_tx_packet(
++                packet_bytes, self._radio_config, self._config,
++            )
+         from src.hal.sx1302_types import LgwPktTxS
+         from src.hal.sx1302_wrapper import (
+             BW_KHZ_TO_HAL,
+@@ -896,6 +890,19 @@ class TxService:
+ 
+         return tx_pkt
+ 
++    async def _send_with_airtime_accounting(self, tx_pkt, airtime_ms: int) -> int:
++        # SX1301 may report failure after emission, or lose status before it can
++        # establish completion. Reserve the entire planned airtime before dispatch,
++        # retaining the charge even on rejection, exception or cancellation. Never
++        # retry/refund an uncertain native attempt. SX1302 retains success accounting.
++        reserve = getattr(self._wrapper, "hardware_backend", None) == "sx1301"
++        if reserve and self._duty:
++            self._duty.record_tx(airtime_ms)
++        result_code = await asyncio.to_thread(self._wrapper.send, tx_pkt)
++        if not reserve and result_code == 0 and self._duty:
++            self._duty.record_tx(airtime_ms)
++        return result_code
++
+     async def _get_airtime(self, tx_pkt) -> int:
+         """Compute airtime via the HAL (or estimate if unavailable)."""
+         try:
+@@ -903,6 +910,9 @@ class TxService:
+                 self._wrapper.get_time_on_air, tx_pkt
+             )
+         except Exception:
++            if getattr(self._wrapper, "hardware_backend", None) == "sx1301":
++                # A fixed-preamble estimate cannot safely budget arbitrary SX1301 settings.
++                raise
+             return self._estimate_airtime(tx_pkt.size, tx_pkt.datarate)
+ 
+     @staticmethod
+diff --git a/tests/fixtures/sx1301_hal_stub.c b/tests/fixtures/sx1301_hal_stub.c
+new file mode 100644
+index 0000000..2673f4b
+--- /dev/null
++++ b/tests/fixtures/sx1301_hal_stub.c
+@@ -0,0 +1,67 @@
++/* Fake HAL for the real SX1301 shim: no radio, GPIO, SPI or wall-clock waits. */
++#include <assert.h>
++#include <stdio.h>
++#include "../../scripts/sx1301_native.c"
++
++static int mode, polls, accepted, emitted_preamble, timed_preamble;
++static int32_t regs[1024];
++int lgw_board_setconf(struct lgw_conf_board_s conf) { (void)conf; return 0; }
++int lgw_rxrf_setconf(uint8_t chain, struct lgw_conf_rxrf_s conf) {
++    (void)chain; (void)conf; return 0;
++}
++int lgw_rxif_setconf(uint8_t chain, struct lgw_conf_rxif_s conf) {
++    (void)chain; (void)conf; return 0;
++}
++int lgw_txgain_setconf(struct lgw_tx_gain_lut_s *conf) { (void)conf; return 0; }
++int lgw_start(void) { return 0; }
++int lgw_stop(void) { return 0; }
++int lgw_receive(uint8_t max, struct lgw_pkt_rx_s *packets) {
++    (void)max; (void)packets; return 0;
++}
++int lgw_reg_w(uint16_t id, int32_t value) { assert(id < 1024); regs[id] = value; return 0; }
++int lgw_reg_r(uint16_t id, int32_t *value) { assert(id < 1024); *value = regs[id]; return 0; }
++void wait_ms(unsigned long ms) { (void)ms; }
++uint32_t lgw_time_on_air(struct lgw_pkt_tx_s *packet) {
++    timed_preamble = packet->preamble;
++    return packet->preamble * 10U + packet->size;
++}
++int lgw_send(struct lgw_pkt_tx_s packet) {
++    emitted_preamble = packet.preamble;
++    accepted = 1; polls = 0;
++    return mode == 3 ? -1 : 0;
++}
++int lgw_status(uint8_t select, uint8_t *status) {
++    (void)select;
++    if (!accepted) { *status = mode == 4 ? TX_SCHEDULED : TX_FREE; return 0; }
++    if (mode == 1) {
++        if (polls++) return -1;
++        *status = TX_EMITTING; return 0;
++    }
++    if (mode == 2) { *status = TX_SCHEDULED; return 0; }
++    *status = polls++ == 0 ? TX_EMITTING : TX_FREE;
++    return 0;
++}
++int main(void) {
++    const uint8_t payload[24] = {0};
++    const int lengths[] = {6, 8, 16, 32, 65533};
++    assert(mp1301_abi_version() == 2);
++    assert(mp1301_configure(906875000, 11, 250, 1, 1, 5) == -1);
++    assert(mp1301_configure(906875000, 11, 250, 1, 1, 65534) == -1);
++    for (unsigned i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
++        assert(mp1301_configure(906875000, 11, 250, 1, 1, lengths[i]) == 0);
++        assert(mp1301_add_gain(0, 1, 3, 12, 10) == 0);
++        assert(mp1301_start() == 0);
++        assert(mp1301_airtime(payload, sizeof(payload), 10, 1) == lengths[i] * 10 + 24);
++        assert(timed_preamble == lengths[i]);
++        for (mode = 0; mode <= 4; mode++) {
++            accepted = polls = 0;
++            int result = mp1301_send(payload, sizeof(payload), 10, 1);
++            assert(result == (mode == 0 ? 0 : -1));
++            assert(mp1301_last_tx_observed() == (mode == 0 || mode == 1));
++            if (mode != 4) assert(emitted_preamble == lengths[i]);
++        }
++        assert(mp1301_stop() == 0);
++    }
++    puts("Native ABI, preamble/airtime, emission failure, timeout and stale-state controls passed");
++    return 0;
++}
+diff --git a/tests/test_sx1301_backend.py b/tests/test_sx1301_backend.py
+new file mode 100644
+index 0000000..b369d20
+--- /dev/null
++++ b/tests/test_sx1301_backend.py
+@@ -0,0 +1,380 @@
++"""SX1301 adapter and existing TX/relay integration; synthetic frames, not RF proof."""
++import struct
++import threading
++from dataclasses import replace
++from unittest.mock import MagicMock
++
++import pytest
++
++from src.capture.sx1301_source import SX1301CaptureSource
++from src.config import AppConfig, RadioConfig, TransmitConfig
++from src.decode.crypto_service import CryptoService
++from src.hal.sx1301_wrapper import SX1301Wrapper
++from src.transmit.tx_service import TxService
++
++GAIN = dict(dig_gain=0, pa_gain=1, dac_gain=3, mix_gain=12, rf_power=10)
++
++
++def wrapper(tx=True):
++    w = SX1301Wrapper("unused.so", tx_gain_lut=[GAIN])
++    w._lib = MagicMock()
++    for name in ("configure", "add_gain", "start", "stop", "send", "receive"):
++        getattr(w._lib, "mp1301_" + name).return_value = 0
++    registers = {}
++    w._lib.lgw_reg_w.side_effect = lambda reg, value: registers.__setitem__(reg, value) or 0
++    def read_register(reg, out):
++        out._obj.value = registers.get(reg, 0)
++        return 0
++    w._lib.lgw_reg_r.side_effect = read_register
++    w._lib.mp1301_airtime.return_value = 500
++    w._lib.mp1301_tx_status.return_value = 2
++    w.configure(RadioConfig(frequency_mhz=906.875), tx)
++    w.start()
++    return w
++
++
++@pytest.mark.parametrize("changes", [dict(region="EU_868"), dict(sync_word=0x34),
++    dict(bandwidth_khz=62), dict(spreading_factor=6), dict(frequency_mhz=902.0)])
++def test_unsupported_radio_configuration_fails_before_native_calls(changes):
++    w = SX1301Wrapper("unused.so")
++    w._lib = MagicMock()
++    with pytest.raises(ValueError):
++        w.configure(replace(RadioConfig(frequency_mhz=906.875), **changes))
++    w._lib.mp1301_configure.assert_not_called()
++
++
++def test_tx_requires_verified_gain_table():
++    w = SX1301Wrapper("unused.so")
++    with pytest.raises(ValueError, match="gain table"):
++        w.configure(RadioConfig(frequency_mhz=906.875), True)
++
++
++def test_real_sx1301_parameters_not_sx1302_abi_values():
++    w = wrapper()
++    w._lib.mp1301_configure.assert_called_once_with(906875000, 11, 250, 1, 1, 16)
++    p = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    assert (p.datarate, p.bandwidth, p.coderate) == (11, 250, 1)
++    assert p.preamble == 16 and not p.invert_pol and not p.no_crc
++
++
++@pytest.mark.parametrize("size", [0, 15, 256])
++def test_oversized_or_truncated_tx_never_reaches_hal(size):
++    w = wrapper()
++    with pytest.raises(ValueError):
++        w.build_tx_packet(bytes(size), w._radio, TransmitConfig(tx_power_dbm=10))
++    w._lib.mp1301_send.assert_not_called()
++
++
++def test_receive_only_gate_and_stop_prevent_transmission():
++    w = wrapper(tx=False)
++    p = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    assert w.send(p) == -1
++    w._lib.mp1301_send.assert_not_called()
++    w.stop()
++    assert w.send(p) == -1
++
++
++def test_tx_rejects_changed_frequency_or_unlisted_power():
++    w = wrapper()
++    p = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    for invalid in [replace(p, freq_hz=915000000), replace(p, rf_power=27)]:
++        with pytest.raises(ValueError):
++            w.send(invalid)
++    w._lib.mp1301_send.assert_not_called()
++
++
++def test_incompatible_shim_abi_rejected(monkeypatch):
++    lib = MagicMock()
++    lib.mp1301_abi_version.return_value = 999
++    monkeypatch.setattr("ctypes.CDLL", lambda _path: lib)
++    w = SX1301Wrapper("unused.so")
++    with pytest.raises(RuntimeError, match="ABI"):
++        w.load()
++    assert w._lib is None
++
++
++def test_rx_and_tx_calls_cannot_overlap():
++    w = wrapper()
++    entered, release, sent = threading.Event(), threading.Event(), threading.Event()
++    def blocked_receive():
++        entered.set()
++        assert release.wait(2)
++        return 0
++    w._lib.mp1301_receive.side_effect = blocked_receive
++    w._lib.mp1301_send.side_effect = lambda *_a: sent.set() or 0
++    p = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    rx = threading.Thread(target=w.receive)
++    tx = threading.Thread(target=lambda: w.send(p))
++    rx.start()
++    assert entered.wait(2)
++    tx.start()
++    assert not sent.wait(.05)
++    release.set()
++    rx.join(2)
++    tx.join(2)
++    assert sent.is_set() and not rx.is_alive() and not tx.is_alive()
++
++
++def test_passive_diagnostics_return_raw_values_without_clear_channel_claim():
++    w = wrapper(tx=False)
++    def read(values, capacity):
++        assert capacity == 8
++        for i in range(capacity):
++            values[i] = i + 10
++        return 0
++    w._lib.mp1301_channel_diagnostics.side_effect = read
++    result = w.read_channel_diagnostics()
++    assert result["registers"]["valid_headers_std"] == 11
++    assert result["channel_clear"] is None and not result["calibrated"]
++    assert result["monotonic_after"] >= result["monotonic_before"]
++    w._lib.mp1301_send.assert_not_called()
++
++
++def test_unavailable_or_failed_diagnostics_never_mean_idle():
++    w = wrapper(tx=False)
++    w._lib.mp1301_channel_diagnostics.return_value = -1
++    with pytest.raises(RuntimeError, match="register read failed"):
++        w.read_channel_diagnostics()
++    w._lib.mp1301_channel_diagnostics = None
++    with pytest.raises(NotImplementedError):
++        w.read_channel_diagnostics()
++    w.stop()
++    with pytest.raises(RuntimeError, match="not running"):
++        w.read_channel_diagnostics()
++
++
++def test_passive_diagnostics_share_the_receive_lock():
++    w = wrapper(tx=False)
++    entered, release, read = threading.Event(), threading.Event(), threading.Event()
++    def blocked_receive():
++        entered.set()
++        assert release.wait(2)
++        return 0
++    w._lib.mp1301_receive.side_effect = blocked_receive
++    w._lib.mp1301_channel_diagnostics.side_effect = lambda *_a: read.set() or 0
++    rx = threading.Thread(target=w.receive)
++    diagnostic = threading.Thread(target=w.read_channel_diagnostics)
++    rx.start()
++    assert entered.wait(2)
++    diagnostic.start()
++    assert not read.wait(.05)
++    release.set()
++    rx.join(2)
++    diagnostic.join(2)
++    assert read.is_set() and not diagnostic.is_alive() and not rx.is_alive()
++
++
++def test_capture_factory_selects_sx1301_and_does_not_inject_sx1302_gains():
++    from src.api.server import _build_pipeline, _inject_tx_gain_into_source
++    from src.log_format import _describe_sources
++    cfg = AppConfig()
++    cfg.capture.sources = ["concentrator"]
++    cfg.capture.concentrator_backend = "sx1301"
++    cfg.capture.meshcore_usb.auto_detect = False
++    coord = _build_pipeline(cfg)
++    source = coord.capture_coordinator._sources[0]
++    assert isinstance(source, SX1301CaptureSource)
++    _inject_tx_gain_into_source(coord)
++    assert "start" not in source.__dict__
++    assert _describe_sources(cfg) == "concentrator (SX1301 single modem)"
++
++
++@pytest.mark.asyncio
++async def test_source_converts_live_capture_to_existing_pipeline():
++    source = SX1301CaptureSource(AppConfig())
++    source._wrapper = MagicMock()
++    source._wrapper.receive.return_value = [dict(payload=b"test", frequency_hz=906875000,
++        spreading_factor=11, bandwidth_khz=250, coderate=1, rssi=-100, snr=2)]
++    await source.start()
++    stream = source.packets()
++    raw = await anext(stream)
++    assert raw.payload == b"test" and raw.capture_source == "concentrator"
++    assert raw.signal.coding_rate == "4/5"
++    await stream.aclose()
++    await source.stop()
++    source._wrapper.stop.assert_called_once()
++
++
++@pytest.mark.asyncio
++async def test_existing_relay_path_preserves_identity_and_honors_rx_gate():
++    w = wrapper()
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    raw = struct.pack("<IIIBBBB", 0xffffffff, 0x12345678, 999, 0x63, 8, 0, 0) + bytes(20)
++    packets = []
++    def record_send(payload, size, power, cr):
++        packets.append(bytes(payload[:size]))
++        return 0
++    w._lib.mp1301_send.side_effect = record_send
++    result = await service.send_raw_relay(raw)
++    assert result.success
++    assert packets[0][:12] == raw[:12] and packets[0][13:15] == raw[13:15]
++    assert packets[0][16:] == raw[16:]
++    assert packets[0][12] == 0x62
++    w._tx = False
++    assert not (await service.send_raw_relay(raw)).success
++    assert len(packets) == 1
++
++
++@pytest.mark.asyncio
++async def test_native_failure_cannot_report_success():
++    w = wrapper()
++    w._lib.mp1301_send.return_value = -1
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    raw = struct.pack("<IIIBBBB", 0xffffffff, 0x12345678, 999, 0x63, 8, 0, 0) + bytes(20)
++    assert not (await service.send_raw_relay(raw)).success
++
++
++def test_receive_preamble_follows_configured_length():
++    w = wrapper()
++    w._lib.lgw_reg_w.assert_called_with(204, 18)
++    w.stop()
++    w.configure(RadioConfig(frequency_mhz=906.875, preamble_length=8), True)
++    w.start()
++    w._lib.lgw_reg_w.assert_called_with(204, 10)
++
++
++def test_receive_preamble_verification_failure_stops_native_owner():
++    w = wrapper()
++    w.stop()
++    w._lib.lgw_reg_r.side_effect = lambda reg, out: 0
++    with pytest.raises(RuntimeError, match="preamble verification"):
++        w.start()
++    assert not w._started
++    assert w._lib.mp1301_stop.call_count == 2
++
++
++@pytest.mark.parametrize("length", [0, 65534, 16.5])
++def test_receive_preamble_rejects_out_of_range_length(length):
++    w = wrapper()
++    w.stop()
++    with pytest.raises(ValueError, match="preamble"):
++        w.configure(RadioConfig(frequency_mhz=906.875, preamble_length=length), True)
++
++
++@pytest.mark.parametrize("operation", ["write", "read"])
++def test_receive_preamble_register_error_stops_native_owner(operation):
++    w = wrapper()
++    w.stop()
++    if operation == "write":
++        w._lib.lgw_reg_w.side_effect = lambda reg, value: -1
++    else:
++        w._lib.lgw_reg_r.side_effect = lambda reg, out: -1
++    with pytest.raises(RuntimeError, match="preamble verification"):
++        w.start()
++    assert not w._started
++    assert w._lib.mp1301_stop.call_count == 2
++
++
++@pytest.mark.parametrize("length", [6, 8, 16, 32, 65533])
++def test_rx_tx_and_airtime_share_configured_preamble(length):
++    w = wrapper()
++    w.stop()
++    w.configure(RadioConfig(frequency_mhz=906.875, preamble_length=length), True)
++    w.start()
++    w._lib.mp1301_configure.assert_called_with(906875000, 11, 250, 1, 1, length)
++    w._lib.lgw_reg_w.assert_called_with(204, length + 2)
++    packet = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    assert packet.preamble == length
++    assert w.get_time_on_air(packet) == 500
++    assert w.send(packet) == 0
++    with pytest.raises(ValueError, match="match configured receiver"):
++        w.send(replace(packet, preamble=length + 1))
++
++
++def test_old_native_abi_rejected_before_configuration(monkeypatch):
++    lib = MagicMock()
++    lib.mp1301_abi_version.return_value = 1
++    monkeypatch.setattr("ctypes.CDLL", lambda _path: lib)
++    w = SX1301Wrapper("unused.so")
++    with pytest.raises(RuntimeError, match="ABI"):
++        w.load()
++    lib.mp1301_configure.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("path", ["text", "nodeinfo", "built", "relay"])
++@pytest.mark.parametrize("outcome", ["success", "observed_failure", "unknown_failure", "exception"])
++async def test_sx1301_airtime_reserved_once_before_dispatch_even_on_failure(path, outcome):
++    w = wrapper()
++    duty = MagicMock()
++    duty.check_budget.return_value = True
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        duty_tracker=duty,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    def send(*args):
++        duty.record_tx.assert_called_once_with(500)
++        if outcome == "exception":
++            raise OSError("native status unavailable")
++        return 0 if outcome == "success" else -1
++    w._lib.mp1301_send.side_effect = send
++    w._lib.mp1301_last_tx_observed.return_value = int(outcome == "observed_failure")
++    raw = struct.pack("<IIIBBBB", 0xffffffff, 0x12345678, 999, 0x63, 8, 0, 0) + bytes(20)
++    async def dispatch():
++        if path == "relay":
++            return await service.send_raw_relay(raw)
++        if path == "nodeinfo":
++            return await service.send_nodeinfo("Synthetic node", "TEST")
++        if path == "built":
++            return await service._send_built_packet(raw, 999, label="regression")
++        return await service.send_text("synthetic airtime test")
++    if outcome == "exception":
++        with pytest.raises(OSError):
++            await dispatch()
++    else:
++        result = await dispatch()
++        assert result.success == (outcome == "success")
++    duty.record_tx.assert_called_once_with(500)
++
++
++@pytest.mark.asyncio
++async def test_sx1301_duty_rejection_never_dispatches_or_charges():
++    w = wrapper()
++    duty = MagicMock()
++    duty.check_budget.return_value = False
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        duty_tracker=duty,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    result = await service._send_built_packet(bytes(24), 999, label="blocked")
++    assert not result.success
++    w._lib.mp1301_send.assert_not_called()
++    duty.record_tx.assert_not_called()
++
++
++@pytest.mark.asyncio
++async def test_sx1301_cancellation_keeps_airtime_reservation(monkeypatch):
++    import asyncio
++
++    w = wrapper()
++    duty = MagicMock()
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        duty_tracker=duty,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    entered = asyncio.Event()
++    async def pending_send(*args):
++        duty.record_tx.assert_called_once_with(500)
++        entered.set()
++        await asyncio.Event().wait()
++    monkeypatch.setattr("src.transmit.tx_service.asyncio.to_thread", pending_send)
++    packet = w.build_tx_packet(bytes(24), w._radio, TransmitConfig(tx_power_dbm=10))
++    task = asyncio.create_task(service._send_with_airtime_accounting(packet, 500))
++    await asyncio.wait_for(entered.wait(), 1)
++    task.cancel()
++    with pytest.raises(asyncio.CancelledError):
++        await task
++    duty.record_tx.assert_called_once_with(500)
++
++
++@pytest.mark.asyncio
++async def test_sx1301_airtime_error_aborts_before_native_dispatch():
++    w = wrapper()
++    w._lib.mp1301_airtime.return_value = -1
++    duty = MagicMock()
++    service = TxService(wrapper=w, crypto=CryptoService(), radio_config=w._radio,
++        duty_tracker=duty,
++        transmit_config=TransmitConfig(enabled=True, tx_power_dbm=10, node_id=0x12341234))
++    with pytest.raises(RuntimeError, match="airtime"):
++        await service._send_built_packet(bytes(24), 999, label="airtime error")
++    w._lib.mp1301_send.assert_not_called()
++    duty.record_tx.assert_not_called()
+diff --git a/tests/test_sx1301_build_provenance.py b/tests/test_sx1301_build_provenance.py
+new file mode 100644
+index 0000000..efabc1f
+--- /dev/null
++++ b/tests/test_sx1301_build_provenance.py
+@@ -0,0 +1,48 @@
++"""A hardware candidate must not silently compile uncommitted HAL source."""
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++
++@pytest.fixture
++def hal_checkout(tmp_path):
++    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
++    (tmp_path / "driver.c").write_text("/* committed input */\n")
++    subprocess.run(["git", "-C", str(tmp_path), "add", "driver.c"], check=True)
++    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c",
++                    "user.email=test@example.invalid", "commit", "-qm", "fixture"], check=True)
++    return tmp_path
++
++
++def check(hal):
++    script = Path(__file__).resolve().parents[1] / "scripts/sx1301_build_provenance.py"
++    return subprocess.run([sys.executable, str(script), "check", str(hal)],
++                          capture_output=True, text=True)
++
++
++def test_clean_hal_is_accepted(hal_checkout):
++    assert check(hal_checkout).returncode == 0
++
++
++def test_modified_committed_hal_is_rejected(hal_checkout):
++    (hal_checkout / "driver.c").write_text("/* uncommitted modification */\n")
++    result = check(hal_checkout)
++    assert result.returncode != 0
++    assert "tracked files must be clean" in result.stderr
++
++
++def test_untracked_even_ignored_hal_source_is_rejected(hal_checkout):
++    (hal_checkout / ".git/info/exclude").write_text("extra.h\n")
++    (hal_checkout / "extra.h").write_text("/* hidden source input */\n")
++    result = check(hal_checkout)
++    assert result.returncode != 0
++    assert "extra.h" in result.stderr
++
++
++def test_generated_hal_config_is_not_an_uncommitted_source_patch(hal_checkout):
++    config = hal_checkout / "libloragw/inc/config.h"
++    config.parent.mkdir(parents=True)
++    config.write_text("/* generated by HAL Makefile */\n")
++    assert check(hal_checkout).returncode == 0
+diff --git a/tests/test_sx1301_native_contract.py b/tests/test_sx1301_native_contract.py
+new file mode 100644
+index 0000000..25d379c
+--- /dev/null
++++ b/tests/test_sx1301_native_contract.py
+@@ -0,0 +1,31 @@
++"""Compile the actual C shim against optional Semtech v5.0.1 headers and a fake HAL.
++
++Set SX1301_HAL_DIR to a clean local lora_gateway checkout to enable this check.
++It needs a C compiler but never links the hardware HAL or accesses a radio.
++"""
++import os
++import shutil
++import subprocess
++from pathlib import Path
++
++import pytest
++
++
++def test_real_native_shim_preamble_airtime_and_failure_contract(tmp_path):
++    hal = os.environ.get("SX1301_HAL_DIR")
++    if not hal:
++        pytest.skip("Set SX1301_HAL_DIR to Semtech HAL 5.0.1 for native contract test")
++    assert (Path(hal) / "VERSION").read_text().strip() == "5.0.1"
++    compiler = shutil.which("cc")
++    if not compiler:
++        pytest.skip("Native contract test requires a C compiler")
++    root = Path(__file__).resolve().parents[1]
++    # Header-only build configuration; no HAL code or generated files are changed.
++    (tmp_path / "config.h").write_text('#define LIBLORAGW_VERSION "5.0.1"\n')
++    binary = tmp_path / "native-contract"
++    subprocess.run([compiler, "-Wall", "-Wextra", "-Werror", "-std=c99",
++                    "-I" + str(Path(hal) / "libloragw/inc"), "-I" + str(tmp_path),
++                    str(root / "tests/fixtures/sx1301_hal_stub.c"), "-o", str(binary)],
++                   check=True, capture_output=True, text=True)
++    result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
++    assert "controls passed" in result.stdout

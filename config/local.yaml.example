@@ -1,0 +1,181 @@
+# /opt/meshpoint/config/local.yaml
+# Copy of config/local.yaml.example from the install repo, ready for this board.
+#
+# Two values must be filled before the service will start:
+#   upstream.auth_token      a free key from meshradar.io (mr1_...). The process
+#                            exits with "Meshpoint is not activated" without it,
+#                            and the dashboard then only shows a fetch error.
+#   capture.sx1301_lib_path  the shim built by scripts/build_sx1301_native.sh
+#
+# transmit / mqtt / upstream publishing stay off until the receive path is proven.
+radio:
+  region: US
+  # Omit (or null) to derive from region + bandwidth + channel name.
+  frequency_mhz: 906.875
+  spreading_factor: 11
+  bandwidth_khz: 250
+  coding_rate: 4/5
+  sync_word: 43
+  spectral_scan_interval_seconds: 0
+capture:
+  sources:
+  - concentrator
+  concentrator_backend: sx1301
+  sx1301_lib_path: /opt/meshpoint/build/libsx1301_meshpoint.so
+  sx1301_reset_gpio: 149   # wrapper pulses this; the real reset is cycling POWER_EN
+  sx1301_clksrc: 1
+  sx1301_tx_gain_lut:
+  - pa_gain: 0
+    mix_gain: 8
+    rf_power: -6
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 0
+    mix_gain: 10
+    rf_power: -3
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 0
+    mix_gain: 12
+    rf_power: 0
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 1
+    mix_gain: 8
+    rf_power: 3
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 1
+    mix_gain: 10
+    rf_power: 6
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 1
+    mix_gain: 12
+    rf_power: 10
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 1
+    mix_gain: 13
+    rf_power: 11
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 2
+    mix_gain: 9
+    rf_power: 12
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 1
+    mix_gain: 15
+    rf_power: 13
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 2
+    mix_gain: 10
+    rf_power: 14
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 2
+    mix_gain: 11
+    rf_power: 16
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 3
+    mix_gain: 9
+    rf_power: 20
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 3
+    mix_gain: 10
+    rf_power: 23
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 3
+    mix_gain: 11
+    rf_power: 25
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 3
+    mix_gain: 12
+    rf_power: 26
+    dig_gain: 0
+    dac_gain: 3
+  - pa_gain: 3
+    mix_gain: 14
+    rf_power: 27
+    dig_gain: 0
+    dac_gain: 3
+  meshcore_usb:
+    auto_detect: false
+dashboard:
+  host: 0.0.0.0
+  port: 8080
+storage:
+  # absolute: the service does not run with /opt/meshpoint as its working dir
+  database_path: /opt/meshpoint/data/concentrator.db
+device:
+  device_name: Nebra LoRa HAT gateway
+  # Set once: openssl rand -hex 16. Empty = regenerated on every start (upstream default).
+  device_id: ""
+  # NodeInfo: 37 PORTDUINO (generic Linux host), 43 HELTEC_V3, 9 RAK4631, 255 PRIVATE_HW
+  hardware_model: 37
+  # CLIENT, CLIENT_MUTE, ROUTER, ROUTER_CLIENT, REPEATER, TRACKER, SENSOR, CLIENT_HIDDEN
+  role: ROUTER_CLIENT
+  hardware_description: Nebra LoRa HAT (GL5712-UX, SX1301)
+  latitude: 0.0
+  longitude: 0.0
+  altitude: 50.0
+transmit:
+  enabled: false
+  tx_power_dbm: 10
+  long_name: Nebra Rock Pi Indoor
+  short_name: SX1
+  hop_limit: 3
+  max_duty_cycle_percent: 1.0
+  nodeinfo:
+    interval_minutes: 5
+    startup_delay_seconds: 60
+  telemetry:
+    interval_minutes: 5
+    startup_delay_seconds: 120
+  position:
+    interval_minutes: 5
+    startup_delay_seconds: 180
+    coordinate_source: static
+    location_precision: approximate
+upstream:
+  # publishing is optional, the key is not: the service exits without a valid key
+  enabled: false
+  auth_token: ""
+mqtt:
+  enabled: false
+  # Paste the !xxxxxxxx the dashboard shows for this node; empty falls back to md5(device_name).
+  gateway_id: ""
+  broker: ""
+  port: 1883
+  username: ""
+  password: ""
+  topic_root: msh
+  region: US
+  tls_enabled: false
+  # Must contain the channel name your region uses, or gate 2 drops every packet.
+  publish_channels:
+  - LongFast
+relay:
+  enabled: false
+  max_relay_per_minute: 2
+  burst_size: 1
+  min_relay_rssi: -125
+  max_relay_rssi: -50
+web_auth:
+  admin_password_hash: ""
+  jwt_secret: ""
+location:
+  source: static
+  gpsd_host: 127.0.0.1
+  gpsd_port: 2947
+  update_interval_seconds: 5
+  min_fix_quality: 1
+meshtastic:
+  primary_channel_name: LongFast
+  channel_keys: {}

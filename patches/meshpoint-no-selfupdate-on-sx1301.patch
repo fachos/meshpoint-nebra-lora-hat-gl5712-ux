@@ -1,0 +1,48 @@
+diff --git a/src/api/update/apply.py b/src/api/update/apply.py
+index c929cc6..dbd818c 100644
+--- a/src/api/update/apply.py
++++ b/src/api/update/apply.py
+@@ -92,6 +92,20 @@ def shell_runner(
+     return completed.returncode, completed.stdout, completed.stderr
+ 
+ 
++def _sx1301_backend() -> bool:
++    """True when this install runs the patched SX1301 backend.
++
++    The updater resets the tree to origin/<branch>. That discards the local
++    SX1301 patches, so an in-app update would silently turn a working gateway
++    into one that cannot open the concentrator.
++    """
++    try:
++        from src.config import load_config
++        return load_config().capture.concentrator_backend == "sx1301"
++    except Exception:
++        return False
++
++
+ class UpdateApplier:
+     """Orchestrate the dashboard-driven update flow."""
+ 
+@@ -122,6 +136,22 @@ class UpdateApplier:
+     ) -> ApplyResult:
+         """Run the chain end-to-end; return an :class:`ApplyResult`."""
+         start = time.time()
++        if _sx1301_backend():
++            logger.warning("apply refused: SX1301 backend carries local patches")
++            return ApplyResult(
++                success=False,
++                duration_seconds=0.0,
++                pre_update_sha=None,
++                target_branch=branch,
++                failed_step="guarded",
++                log=[{
++                    "label": "guarded",
++                    "returncode": 1,
++                    "detail": ("SX1301 install: the update would git reset the tree "
++                               "and remove the three local patches. Re-run the "
++                               "install repo's patch steps instead."),
++                }],
++            )
+         log: list[dict] = []
+         pre_sha = self._capture_head_sha()
+         if pre_sha:

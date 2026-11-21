@@ -1,4 +1,4 @@
-# Armbian Rock Pi 4B+ with Nebra LoRa HAT - Meshpoint -> Meshradar
+# Armbian Rock Pi 4B+ with Nebra HAT - Meshpoint -> Meshradar
 
 Run the [meshpoint](https://github.com/KMX415/meshpoint) base station on a
 **Radxa ROCK Pi 4B+** with the Nebra LoRa HAT, then optionally publish what it
